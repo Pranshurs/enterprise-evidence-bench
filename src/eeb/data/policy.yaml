@@ -1,0 +1,188 @@
+# Canonical access policy (spec §5). Single source of truth for BOTH implementations:
+#   - eeb/policy/sqlgen.py compiles it to Postgres grants + row-level security;
+#   - eeb/policy/oracle.py evaluates it in pure Python.
+# They share no evaluation code. eeb/policy/schema.py only validates the shape below.
+#
+# Semantics (normative for both implementations):
+#   * default deny: a role sees a table only if listed under it; a table listed for no role
+#     is never granted (e.g. supplier_bank_accounts).
+#   * a principal sees a row if ANY of its ACTIVE assignments' role has a row rule that holds;
+#     an assignment is active iff valid_from <= today and (valid_to is null or today <= valid_to),
+#     where today is the instance's fixed benchmark date.
+#   * a principal sees a column if any active assignment's role grants it on that table.
+#   * row rule operators:
+#       all                         every row
+#       eq_param: {column, param}   row[column] equals the assignment's parameter value;
+#                                   a NULL column never matches
+#       in_values: {column, values} row[column] is one of values; NULL never matches
+#       is_null: column             row[column] is NULL
+#       in_parent: {table, fk, pk}  the referenced parent row (fk -> pk) is visible to the
+#                                   same principal; a NULL fk never matches
+#       any_of: [rules] / all_of: [rules]
+#   * a principal holds exactly one role; a role has at most one parameter.
+policy_version: 1
+roles:
+  category_manager:
+    param: category
+    tables:
+      business_units: {rows: all, columns: "*"}
+      cost_centers: {rows: all, columns: "*"}
+      categories: {rows: all, columns: "*"}
+      items: {rows: all, columns: "*"}
+      fx_rates: {rows: all, columns: "*"}
+      suppliers:
+        rows: {eq_param: {column: category_id, param: category}}
+        columns: "*"
+      supplier_contacts:
+        rows: {in_parent: {table: suppliers, fk: [supplier_id], pk: [supplier_id]}}
+        columns: [contact_id, supplier_id, role_title, row_tag]
+      contracts:
+        rows: {eq_param: {column: category_id, param: category}}
+        columns: "*"
+      contract_price_schedule:
+        rows: {in_parent: {table: contracts, fk: [contract_id], pk: [contract_id]}}
+        columns: "*"
+      purchase_orders:
+        rows: {in_parent: {table: suppliers, fk: [supplier_id], pk: [supplier_id]}}
+        columns: "*"
+      po_lines:
+        rows: {in_parent: {table: purchase_orders, fk: [po_id], pk: [po_id]}}
+        columns: "*"
+      goods_receipts:
+        rows: {in_parent: {table: purchase_orders, fk: [po_id], pk: [po_id]}}
+        columns: "*"
+      invoices:
+        rows: {in_parent: {table: purchase_orders, fk: [po_id], pk: [po_id]}}
+        columns: "*"
+      invoice_lines:
+        rows: {in_parent: {table: invoices, fk: [invoice_id], pk: [invoice_id]}}
+        columns: "*"
+      service_credit_claims:
+        rows: {in_parent: {table: contracts, fk: [contract_id], pk: [contract_id]}}
+        columns: "*"
+      policy_exceptions:
+        rows: {in_parent: {table: purchase_orders, fk: [po_id], pk: [po_id]}}
+        columns: "*"
+      supplier_incidents:
+        rows: {in_parent: {table: suppliers, fk: [supplier_id], pk: [supplier_id]}}
+        columns: "*"
+      doc_chunks:
+        rows:
+          any_of:
+            - all_of:
+                - in_values: {column: classification, values: [contract, sla, exception_memo, incident]}
+                - eq_param: {column: scope_category, param: category}
+            - in_values: {column: classification, values: [policy, faq]}
+        columns: "*"
+
+  bu_buyer:
+    param: bu
+    tables:
+      business_units: {rows: all, columns: "*"}
+      cost_centers: {rows: all, columns: "*"}
+      categories: {rows: all, columns: "*"}
+      items: {rows: all, columns: "*"}
+      fx_rates: {rows: all, columns: "*"}
+      suppliers: {rows: all, columns: [supplier_id, name, category_id, country, currency, status, row_tag]}
+      contracts:
+        rows: all
+        columns: [contract_id, supplier_id, category_id, bu_id, effective_from, effective_to, status, row_tag]
+      purchase_orders:
+        rows: {eq_param: {column: bu_id, param: bu}}
+        columns: "*"
+      po_lines:
+        rows: {in_parent: {table: purchase_orders, fk: [po_id], pk: [po_id]}}
+        columns: "*"
+      goods_receipts:
+        rows: {in_parent: {table: purchase_orders, fk: [po_id], pk: [po_id]}}
+        columns: "*"
+      policy_exceptions:
+        rows: {in_parent: {table: purchase_orders, fk: [po_id], pk: [po_id]}}
+        columns: [exception_id, po_id, reason, approver_role, approved_on, doc_id, row_tag]
+      doc_chunks:
+        rows: {in_values: {column: classification, values: [policy, faq]}}
+        columns: "*"
+
+  ap_clerk:
+    param: bu
+    tables:
+      business_units: {rows: all, columns: "*"}
+      cost_centers: {rows: all, columns: "*"}
+      fx_rates: {rows: all, columns: "*"}
+      suppliers: {rows: all, columns: [supplier_id, name, country, currency, status, row_tag]}
+      contracts:
+        rows: all
+        columns: [contract_id, supplier_id, payment_terms_days, status, row_tag]
+      invoices:
+        rows: {eq_param: {column: bu_id, param: bu}}
+        columns: "*"
+      invoice_lines:
+        rows: {in_parent: {table: invoices, fk: [invoice_id], pk: [invoice_id]}}
+        columns: "*"
+      payments:
+        rows: {in_parent: {table: invoices, fk: [invoice_id], pk: [invoice_id]}}
+        columns: "*"
+      doc_chunks:
+        rows:
+          any_of:
+            - all_of:
+                - in_values: {column: classification, values: [contract]}
+                - in_values: {column: section_kind, values: [payment_terms]}
+            - in_values: {column: classification, values: [policy, faq]}
+        columns: "*"
+
+  finance_controller:
+    param: null
+    tables:
+      business_units: {rows: all, columns: "*"}
+      cost_centers: {rows: all, columns: "*"}
+      categories: {rows: all, columns: "*"}
+      items: {rows: all, columns: "*"}
+      fx_rates: {rows: all, columns: "*"}
+      suppliers: {rows: all, columns: "*"}
+      supplier_contacts: {rows: all, columns: [contact_id, supplier_id, role_title, row_tag]}
+      contracts: {rows: all, columns: "*"}
+      contract_price_schedule: {rows: all, columns: "*"}
+      purchase_orders: {rows: all, columns: "*"}
+      po_lines: {rows: all, columns: "*"}
+      goods_receipts: {rows: all, columns: "*"}
+      invoices: {rows: all, columns: "*"}
+      invoice_lines: {rows: all, columns: "*"}
+      payments: {rows: all, columns: "*"}
+      budgets: {rows: all, columns: "*"}
+      service_credit_claims: {rows: all, columns: "*"}
+      policy_exceptions: {rows: all, columns: "*"}
+      doc_chunks:
+        rows: {in_values: {column: classification, values: [finance_memo, policy, faq, contract, sla, exception_memo]}}
+        columns: "*"
+
+  legal_counsel:
+    param: null
+    tables:
+      business_units: {rows: all, columns: "*"}
+      categories: {rows: all, columns: "*"}
+      items: {rows: all, columns: "*"}
+      suppliers: {rows: all, columns: "*"}
+      contracts: {rows: all, columns: "*"}
+      contract_price_schedule: {rows: all, columns: "*"}
+      service_credit_claims: {rows: all, columns: "*"}
+      policy_exceptions: {rows: all, columns: "*"}
+      supplier_incidents: {rows: all, columns: "*"}
+      doc_chunks:
+        rows:
+          in_values:
+            column: classification
+            values: [contract, sla, policy, faq, exception_memo, incident, legal_opinion]
+        columns: "*"
+
+  risk_analyst:
+    param: null
+    tables:
+      business_units: {rows: all, columns: "*"}
+      categories: {rows: all, columns: "*"}
+      suppliers: {rows: all, columns: "*"}
+      supplier_incidents: {rows: all, columns: "*"}
+      supplier_risk_ratings: {rows: all, columns: "*"}
+      doc_chunks:
+        rows: {in_values: {column: classification, values: [risk_note, incident, policy, faq]}}
+        columns: "*"

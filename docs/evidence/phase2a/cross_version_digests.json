@@ -1,0 +1,59 @@
+{
+  "all_identical": true,
+  "cases": {
+    "1234:small": {
+      "differing_files": {
+        "3.12.13": [],
+        "3.13.16": [],
+        "3.14.8": []
+      },
+      "file_count": 121,
+      "identical": true,
+      "instance_digest": [
+        "6e07813d9d8b1977096f773ae9bd4cdaa5299116dfafcc50edfea05f07356d9d"
+      ],
+      "interpreters": [
+        "3.11.17",
+        "3.12.13",
+        "3.13.16",
+        "3.14.8"
+      ]
+    },
+    "7:default": {
+      "differing_files": {
+        "3.12.13": [],
+        "3.13.16": [],
+        "3.14.8": []
+      },
+      "file_count": 280,
+      "identical": true,
+      "instance_digest": [
+        "c92995e13c0574a52158c729fc0685a4899a14a62f9c011f00e959074d15ea52"
+      ],
+      "interpreters": [
+        "3.11.17",
+        "3.12.13",
+        "3.13.16",
+        "3.14.8"
+      ]
+    },
+    "7:small": {
+      "differing_files": {
+        "3.12.13": [],
+        "3.13.16": [],
+        "3.14.8": []
+      },
+      "file_count": 126,
+      "identical": true,
+      "instance_digest": [
+        "79d8c4d13dca4f2c011310172ca8c9082da497087499e78f1b65543a332a76ca"
+      ],
+      "interpreters": [
+        "3.11.17",
+        "3.12.13",
+        "3.13.16",
+        "3.14.8"
+      ]
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "byte_identical_A_vs_B": true,
+  "containers": {
+    "A": "ead799427aff",
+    "B": "6fe48a55f216"
+  },
+  "files_compared": 281,
+  "instance_digest": "c92995e13c0574a52158c729fc0685a4899a14a62f9c011f00e959074d15ea52",
+  "procedure": "eeb build --seed 7 --scale default on fresh postgres:17 container A; container destroyed; same build on fresh container B; eeb verify of instance A on container B",
+  "validation_A": {
+    "authorization_outcome_digest": {
+      "database": "eb4ac67d342b7fe14fe60fde6d8b5fc95c51ebd8cd00ea83febd5a3f3dbc081a",
+      "oracle": "eb4ac67d342b7fe14fe60fde6d8b5fc95c51ebd8cd00ea83febd5a3f3dbc081a",
+      "recorded": "eb4ac67d342b7fe14fe60fde6d8b5fc95c51ebd8cd00ea83febd5a3f3dbc081a"
+    },
+    "database_reload_identical": true,
+    "disagreements": 0,
+    "gold_sql": {
+      "mismatches": [],
+      "sql_facts_checked": 29
+    },
+    "hardening_problems": 0,
+    "passed": true
+  },
+  "verify_A_on_B": {
+    "authorization_outcome_digest": {
+      "database": "eb4ac67d342b7fe14fe60fde6d8b5fc95c51ebd8cd00ea83febd5a3f3dbc081a",
+      "oracle": "eb4ac67d342b7fe14fe60fde6d8b5fc95c51ebd8cd00ea83febd5a3f3dbc081a",
+      "recorded": "eb4ac67d342b7fe14fe60fde6d8b5fc95c51ebd8cd00ea83febd5a3f3dbc081a"
+    },
+    "database_reload_identical": true,
+    "disagreements": 0,
+    "gold_sql": {
+      "mismatches": [],
+      "sql_facts_checked": 29
+    },
+    "hardening_problems": 0,
+    "passed": true
+  }
+}

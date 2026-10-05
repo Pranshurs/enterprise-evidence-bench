@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -68,6 +69,19 @@ INDEXATION_DATE = dt.date(2025, 7, 1)
 S1_QUARTERS = ("2025Q2", "2025Q3")
 S2_QUARTER = "2025Q3"
 S3_QUARTER = "2025Q4"
+
+
+def significant_digits(x: Decimal) -> int:
+    return len(x.normalize().as_tuple().digits)
+
+
+def distinctive(draw: Callable[[], Decimal]) -> Decimal:
+    """Redraw until the value has >= 6 significant digits, so it can serve as a
+    collision-resistant direct-value exposure probe (ADR-0003)."""
+    while True:
+        v = draw()
+        if significant_digits(v) >= 6:
+            return v
 
 
 @dataclass
@@ -542,14 +556,17 @@ class DomainBuilder:
                 item = s.choice([i for i, c in self.w.item_category.items() if c == cat])
                 v1, v2 = THRESHOLDS_V1[cur], THRESHOLDS_V2[cur]
                 variants = (
-                    ("between", money(v2 + (v1 - v2) * s.decimal("0.2", "0.8", 2)), None),
-                    ("full_exception", money(v1 * s.decimal("1.1", "1.6", 2)), "full"),
-                    ("partial_exception", money(v1 * s.decimal("1.1", "1.6", 2)), "partial"),
+                    ("between", distinctive(lambda: money(  # draws run immediately
+                        v2 + (v1 - v2) * s.decimal("0.200000", "0.800000", 6))), None),  # noqa: B023
+                    ("full_exception", distinctive(lambda: money(
+                        v1 * s.decimal("1.100000", "1.600000", 6))), "full"),  # noqa: B023
+                    ("partial_exception", distinctive(lambda: money(
+                        v1 * s.decimal("1.100000", "1.600000", 6))), "partial"),  # noqa: B023
                 )
                 for k, (label, total, exc) in enumerate(variants):
                     po_id = f"PO-S3-{sid[4:]}-{k + 1}"
                     d = first + dt.timedelta(days=5 + 9 * k + s.below(5))
-                    qty = 10
+                    qty = 1  # one lot, so the PO total keeps its distinctive digits
                     price = money(total / qty)
                     bu = bu_of[cur]
                     self._po(s, po_id, d, bu, sid, None, [(item, qty, price, 10, False)],
@@ -557,8 +574,8 @@ class DomainBuilder:
                     po_total = money(price * qty)
                     if exc is not None:
                         n_ex += 1
-                        amount = po_total if exc == "full" else money(
-                            po_total * s.decimal("0.5", "0.85", 2))
+                        amount = po_total if exc == "full" else distinctive(lambda: money(
+                            po_total * s.decimal("0.50000", "0.85000", 5)))  # noqa: B023
                         self.w.exceptions.append({
                             "exception_id": f"EXC-{n_ex:04d}", "po_id": po_id,
                             "reason": "Sole qualified source during capacity shortfall"
@@ -674,9 +691,11 @@ class DomainBuilder:
                 if m.month % 3 != 1:
                     continue
                 quarter = f"{m.year}Q{(m.month - 1) // 3 + 1}"
-                amount = Decimal(s.randint(40, 400) * 1000) * CURRENCY_FACTOR[cur[cc["bu_id"]]]
+                factor = CURRENCY_FACTOR[cur[cc["bu_id"]]]
+                amount = distinctive(lambda: money(
+                    Decimal(s.randint(4_000_000, 40_000_000)) / 100 * factor))  # noqa: B023
                 rows.append({"cost_center_id": cc["cc_id"], "quarter": quarter,
-                             "amount": money(amount), "currency": cur[cc["bu_id"]],
+                             "amount": amount, "currency": cur[cc["bu_id"]],
                              "row_tag": self.row_tag("budgets", {"cost_center_id": cc["cc_id"],
                                                                  "quarter": quarter})})
         self.t["budgets"] = rows
@@ -691,8 +710,9 @@ class DomainBuilder:
                 quarter = s.choice(("2024Q2", "2024Q3", "2024Q4", "2025Q1"))
                 claims.append({
                     "claim_id": f"SCC-{n:04d}", "contract_id": c.contract_id, "quarter": quarter,
-                    "amount": money(s.decimal("200", "9000", 2)
-                                    * CURRENCY_FACTOR[self.w.supplier_currency[c.supplier_id]]),
+                    "amount": distinctive(lambda: money(
+                        s.decimal("1200", "9000", 2)
+                        * CURRENCY_FACTOR[self.w.supplier_currency[c.supplier_id]])),  # noqa: B023
                     "currency": self.w.supplier_currency[c.supplier_id],
                     "status": s.choice(("paid", "disputed", "open")),
                     "row_tag": self.row_tag("service_credit_claims", {"claim_id": f"SCC-{n:04d}"}),

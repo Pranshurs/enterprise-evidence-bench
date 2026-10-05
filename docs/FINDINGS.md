@@ -37,3 +37,20 @@ caught.**
   effective. Removing both was detected as cross-principal widening.
 - *Classification.* These single deletions are **masked by redundant enforcement**, not
   logically equivalent. `test_login_binding_has_two_layers` asserts all three variants.
+
+## ADR-0003 acceptance
+
+**F-4: some restricted values could not serve as direct-value probes.**
+- *Audit.* The audit for the direct-value exposure registry (seed 7 default, generator
+  2a.1) found:
+  - budget amounts: 0 of 120 distinctive (round planning figures);
+  - policy-exception amounts: 1 of 18 distinctive (round S3 totals);
+  - one seed had a non-distinctive claim amount;
+  - 5 of 737 coined name words collided with dictionary words (`tonal`, `zuni`, `dani`,
+    `tarin`, `huspil`; all 4–6 letters).
+- *Fix (generator 2a.2, required by the ADR-0003 ruling).* Budget, claim, exception and S3
+  PO amounts are drawn with ≥ 6 significant digits, and S3 POs are one lot so the total
+  keeps them. A single coined word is a name probe only if it has ≥ 7 letters. Full names
+  are always probes.
+- *Result.* 0 non-distinctive gated amounts across 4 seeds × 2 scales. The golden digest
+  and cross-version evidence were regenerated in `docs/evidence/adr0003/`.

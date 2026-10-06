@@ -132,16 +132,73 @@ def necessity(data: InstanceData, slots: dict[str, Any], gold: dict[str, Any]) -
 
 # ---------------------------------------------------------------------------- metric layer
 class MetricSearch:
-    """Searches the governed catalog for a query that reproduces a value."""
+    """Searches the governed catalog for a query that reproduces a value.
+
+    The search space is every catalog metric, every subset of the filters the case's own
+    slots allow, and every grouping on up to two declared dimensions. The numeric results
+    of one (principal, metric, filter subset, grouping) query do not depend on the value
+    being searched for, so they are computed once and reused; filtered row sets come from
+    a per-dimension index rather than a scan. Neither changes which queries are tried.
+    """
 
     def __init__(self) -> None:
         self._rows: dict[tuple[str, str], list[dict[str, Any]] | None] = {}
+        self._index: dict[tuple[str, str, str], dict[str, list[int]]] = {}
+        self._subsets: dict[tuple[str, str, tuple[tuple[str, str], ...]],
+                            list[dict[str, Any]]] = {}
+        self._values: dict[tuple[Any, ...], tuple[Decimal, ...]] = {}
 
     def _view(self, view: PrincipalView, name: str) -> list[dict[str, Any]] | None:
         key = (view.pid, name)
         if key not in self._rows:
             self._rows[key] = reference.view_rows(view, name)
         return self._rows[key]
+
+    def _positions(self, pid: str, name: str, rows: list[dict[str, Any]],
+                   dim: str) -> dict[str, list[int]]:
+        key = (pid, name, dim)
+        if key not in self._index:
+            idx: dict[str, list[int]] = {}
+            for i, r in enumerate(rows):
+                idx.setdefault(str(r[dim]), []).append(i)
+            self._index[key] = idx
+        return self._index[key]
+
+    def _subset(self, pid: str, name: str, rows: list[dict[str, Any]],
+                fsub: tuple[tuple[str, str], ...]) -> list[dict[str, Any]]:
+        """Rows matching every filter in ``fsub``, in view order."""
+        if not fsub:
+            return rows
+        key = (pid, name, fsub)
+        if key not in self._subsets:
+            (d0, v0), rest = fsub[0], fsub[1:]
+            self._subsets[key] = [
+                r for r in (rows[i] for i in self._positions(pid, name, rows, d0).get(v0, []))
+                if all(str(r[d]) == val for d, val in rest)]
+        return self._subsets[key]
+
+    def _query_values(self, pid: str, metric: str, m: dict[str, Any],
+                      rows: list[dict[str, Any]], fsub: tuple[tuple[str, str], ...],
+                      gb: tuple[str, ...]) -> tuple[Decimal, ...]:
+        """Every numeric result of one metric query (one value per group)."""
+        key = (pid, metric, fsub, gb)
+        if key not in self._values:
+            sub = self._subset(pid, m["view"], rows, fsub)
+            group = list(dict.fromkeys(list(m["always_group_by"]) + list(gb)))
+            buckets: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+            for r in sub:
+                buckets.setdefault(tuple(str(r[x]) for x in group), []).append(r)
+            if not group:
+                buckets = {(): sub}
+            out = []
+            for members in buckets.values():
+                if not members and metric != "po_count":
+                    continue
+                n = _num(reference.measure(metric, members))
+                if n is not None:
+                    out.append(n)
+            self._values[key] = tuple(out)
+        return self._values[key]
 
     def reconstructible(self, view: PrincipalView, slots: dict[str, Any], value: Any,
                         tolerance: str) -> bool:
@@ -157,22 +214,11 @@ class MetricSearch:
                           for d in dims if d in m["filters"]]
             for k in range(len(applicable) + 1):
                 for fsub in itertools.combinations(applicable, k):
-                    sub = [r for r in rows if all(str(r[d]) == val for d, val in fsub)]
                     for g in range(0, 3):
                         for gb in itertools.combinations(m["dimensions"], g):
-                            group = list(dict.fromkeys(list(m["always_group_by"]) + list(gb)))
-                            buckets: dict[tuple[str, ...], list[dict[str, Any]]] = {}
-                            for r in sub:
-                                buckets.setdefault(tuple(str(r[x]) for x in group), []).append(r)
-                            if not group:
-                                buckets = {(): sub}
-                            for members in buckets.values():
-                                if not members and metric != "po_count":
-                                    continue
-                                got = reference.measure(metric, members)
-                                n = _num(got)
-                                if n is not None and abs(n - want) <= tol:
-                                    return True
+                            if any(abs(n - want) <= tol for n in
+                                   self._query_values(view.pid, metric, m, rows, fsub, gb)):
+                                return True
         return False
 
 

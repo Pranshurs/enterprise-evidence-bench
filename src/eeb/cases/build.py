@@ -111,7 +111,7 @@ class CaseBuilder:
               v: dict[str, Any], family_id: str) -> dict[str, Any]:
         g = v["gold"]
         question = t.question(self.ctx, slots)
-        return as_jsonable({
+        case: dict[str, Any] = as_jsonable({
             "schema_version": CASE_SCHEMA_VERSION,
             "case_id": slot["case_id"], "class": slot["class"], "split": slot["split"],
             "group_id": slot["group_id"], "group_member": slot["group_member"],
@@ -135,6 +135,7 @@ class CaseBuilder:
             "provenance": {"authored_by": "template", "template_id": t.id,
                            "reviewed_by_human": False, "perturbation_of": None},
         })
+        return case
 
     def _compatible(self, slot: dict[str, Any]) -> list[Template]:
         cls = "X" if slot["group_member"] == "permitted" else slot["class"]
@@ -147,6 +148,8 @@ class CaseBuilder:
 
     def _injection_principal(self, slots: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
         sid = slots.get("supplier_id")
+        if sid is None:
+            return None
         inj = next((i for i in self.data.injections if i["supplier_id"] == sid), None)
         if inj is None:
             return None
@@ -229,7 +232,7 @@ class CaseBuilder:
                     self.used.add(_rank(0, t.id, slots, pid))
                     fam = _rank(0, "family", t.id, slots)[:16]
                     x = self._case(permitted_slot, t, slots, pid, v, fam)
-                    a_gold = {"expected_outcome": "ABSTAIN", "facts": [],
+                    a_gold: dict[str, Any] = {"expected_outcome": "ABSTAIN", "facts": [],
                               "answer_requirement": [], "required_citations": [],
                               "expected_conflicts": [], "clarify": None,
                               "abstention_condition": "not_authorized"}

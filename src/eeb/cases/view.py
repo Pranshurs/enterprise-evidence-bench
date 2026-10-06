@@ -27,6 +27,8 @@ class InstanceData:
     tables: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     docs: dict[tuple[str, int], dict[str, Any]] = field(default_factory=dict)
     oracle: Oracle | None = None
+    _visible: dict[tuple[str, str], tuple[dict[str, Any], ...]] = field(
+        default_factory=dict, repr=False)
 
     @classmethod
     def load(cls, root: Path) -> InstanceData:
@@ -119,10 +121,17 @@ class PrincipalView:
             self.oracle.columns(self.pid, table))
 
     def rows(self, table: str) -> list[dict[str, Any]]:
-        if not self.oracle.privileged(self.pid, table):
-            return []
-        vis = self.oracle.visible_rows(self.pid, table)
-        return [r for r in self.data.tables[table] if pk_key(table, r) in vis]
+        """Visible rows in table order. The oracle decides once per (principal, table);
+        the instance is read-only, so the decision is reused."""
+        key = (self.pid, table)
+        if key not in self.data._visible:
+            if not self.oracle.privileged(self.pid, table):
+                self.data._visible[key] = ()
+            else:
+                vis = self.oracle.visible_rows(self.pid, table)
+                self.data._visible[key] = tuple(
+                    r for r in self.data.tables[table] if pk_key(table, r) in vis)
+        return list(self.data._visible[key])
 
     def chunk_visible(self, chunk_id: str | None) -> bool:
         return chunk_id is not None and (chunk_id,) in self.oracle.visible_rows(

@@ -257,6 +257,8 @@ class DomainBuilder:
     # ------------------------------------------------------------------ contracts
     def contracts(self) -> None:
         s = self.s("contracts")
+        # Its own stream: adding a contract attribute must not shift every later draw.
+        sq = self.s("contracts/quality_threshold")
         n = 0
         for sup in self.t["suppliers"]:
             if sup["category_id"] is None:
@@ -283,8 +285,8 @@ class DomainBuilder:
                     sla_credit_pct_per_point=s.choice((Decimal("0.5"), Decimal("1.0"),
                                                        Decimal("1.5"))),
                     sla_cap_pct=s.choice((Decimal(5), Decimal(8), Decimal(10))),
-                    quality_threshold_pct=s.choice((Decimal("1.0"), Decimal("1.5"),
-                                                    Decimal("2.0"), Decimal("2.5"))),
+                    quality_threshold_pct=sq.choice((Decimal("1.0"), Decimal("1.5"),
+                                                     Decimal("2.0"), Decimal("2.5"))),
                     items=sorted(s.sample(cat_items, k)),
                 )
                 self.w.contracts[cid] = info

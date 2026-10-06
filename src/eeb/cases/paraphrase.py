@@ -17,6 +17,10 @@ from eeb import canonical
 from eeb.cases import rephrase
 from eeb.harness.upstreams import Upstream
 
+# Generation parameters, recorded in the run's provenance.
+MAX_TOKENS = 300
+TEMPERATURE = 0
+
 PROMPT = """Rewrite this question the way a different employee might ask it. Keep its meaning
 exactly: the same entities, identifiers, periods, dates, currencies, numbers, comparison
 direction and qualifiers, and no assumption about who may see what. Keep every item listed
@@ -47,9 +51,10 @@ def _text(api: str, resp: dict[str, Any]) -> str:
 
 def paraphrase_queue(entries: list[dict[str, Any]], upstream: Upstream, api: str,
                      model: str, family: str, reference_family: str,
-                     only: str = "pending") -> dict[str, int]:
+                     only: str = "pending", limit: int = 0) -> dict[str, int]:
     """Ask for a paraphrase of each selected entry (``pending``: never paraphrased;
-    ``rejected``: paraphrased but mechanically rejected). Updates entries in place."""
+    ``rejected``: paraphrased but mechanically rejected), at most ``limit`` of them when
+    set (a pilot). Updates entries in place."""
     if rephrase.family_of(family) == rephrase.family_of(reference_family):
         raise ValueError(f"{family} is the reference agent's family")
     counts = {"asked": 0, "consistent": 0, "rejected": 0, "failed": 0}
@@ -60,7 +65,10 @@ def paraphrase_queue(entries: list[dict[str, Any]], upstream: Upstream, api: str
             continue
         if only == "rejected" and not (done and prior):
             continue
-        body: dict[str, Any] = {"model": model, "max_tokens": 300, "temperature": 0,
+        if limit and counts["asked"] >= limit:
+            break
+        body: dict[str, Any] = {"model": model, "max_tokens": MAX_TOKENS,
+                                "temperature": TEMPERATURE,
                                 "messages": [{"role": "user", "content": prompt_for(e)}]}
         counts["asked"] += 1
         status, resp, _ = asyncio.run(upstream.complete(api, body))
@@ -74,6 +82,16 @@ def paraphrase_queue(entries: list[dict[str, Any]], upstream: Upstream, api: str
                  meaning_preserved_check={"mechanical": problems, "human": None})
         counts["rejected" if problems else "consistent"] += 1
     return counts
+
+
+def provenance_record(model: str, family: str, api: str, only: str, limit: int,
+                      counts: dict[str, int], commit: str, when: str) -> dict[str, Any]:
+    """One paraphrase run, for ``rephrase_provenance.jsonl``. Only what reproduces the
+    request: never keys, headers or raw provider responses."""
+    return {"when": when, "commit": commit, "family": family, "model": model, "api": api,
+            "parameters": {"temperature": TEMPERATURE, "max_tokens": MAX_TOKENS},
+            "prompt_sha256": canonical.sha256_text(PROMPT), "selection": only,
+            "limit": limit or None, "counts": counts}
 
 
 def dumps_queue(entries: list[dict[str, Any]]) -> bytes:

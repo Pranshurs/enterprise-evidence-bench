@@ -157,7 +157,7 @@ def cmd_cases_verify(args: argparse.Namespace) -> int:
 def cmd_cases_rephrase(args: argparse.Namespace) -> int:
     """Paraphrase queued questions with an independent model family (Anthropic). The key is
     read from ANTHROPIC_API_KEY and never written anywhere."""
-    from eeb.cases.paraphrase import dumps_queue, paraphrase_queue
+    from eeb.cases.paraphrase import dumps_queue, paraphrase_queue, provenance_record
     from eeb.harness.upstreams import AnthropicUpstream
 
     key = os.environ.get("ANTHROPIC_API_KEY")
@@ -166,10 +166,45 @@ def cmd_cases_rephrase(args: argparse.Namespace) -> int:
     path = Path(args.cases) / "rephrase_queue.jsonl"
     entries = read_jsonl(path)
     counts = paraphrase_queue(entries, AnthropicUpstream(api_key=key), "anthropic.messages",
-                              args.model, "anthropic", args.reference_family, args.only)
+                              args.model, "anthropic", args.reference_family, args.only,
+                              args.limit)
     path.write_bytes(dumps_queue(entries))
+    import datetime as dt
+    rec = provenance_record(args.model, "anthropic", "anthropic.messages", args.only,
+                            args.limit, counts, _git_head(),
+                            dt.datetime.now(dt.UTC).isoformat(timespec="seconds"))
+    with (Path(args.cases) / "rephrase_provenance.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, sort_keys=True) + "\n")
     print(json.dumps(counts, indent=2))
     return 0
+
+
+def _tree_clean() -> bool:
+    import subprocess
+    r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True,
+                       check=False, cwd=Path(__file__).resolve().parents[2])
+    return r.returncode == 0 and not r.stdout.strip()
+
+
+def cmd_cases_freeze(args: argparse.Namespace) -> int:
+    from eeb.cases.freeze import FreezeError, freeze
+    spec = Path(args.spec) if args.spec else Path(__file__).resolve().parents[2] / "docs/spec.md"
+    try:
+        rec = freeze(Path(args.cases), Path(args.instance), spec, args.reference_family,
+                     _git_head(), _tree_clean())
+    except FreezeError as e:
+        print(f"FREEZE REFUSED: {e}", file=sys.stderr)
+        return 1
+    print(json.dumps({k: rec[k] for k in ("status", "commit", "canonical_cases_sha256",
+                                          "final_cases_sha256", "counts")}, indent=2))
+    return 0
+
+
+def cmd_cases_verify_frozen(args: argparse.Namespace) -> int:
+    from eeb.cases.freeze import verify_frozen
+    problems = verify_frozen(Path(args.cases))
+    print(json.dumps({"problems": problems, "intact": not problems}, indent=2))
+    return 1 if problems else 0
 
 
 def _git_head() -> str:
@@ -266,7 +301,17 @@ def main(argv: list[str] | None = None) -> int:
     cr.add_argument("--model", required=True, help="exact model id, recorded per entry")
     cr.add_argument("--reference-family", default="openai")
     cr.add_argument("--only", choices=["pending", "rejected"], default="pending")
+    cr.add_argument("--limit", type=int, default=0, help="at most this many (a pilot)")
     cr.set_defaults(func=cmd_cases_rephrase)
+    cf = csub.add_parser("freeze", help="freeze a verified, reviewed and paraphrased corpus")
+    cf.add_argument("--cases", required=True)
+    cf.add_argument("--instance", required=True)
+    cf.add_argument("--reference-family", default="openai")
+    cf.add_argument("--spec", help="the frozen spec (default: docs/spec.md)")
+    cf.set_defaults(func=cmd_cases_freeze)
+    cvf = csub.add_parser("verify-frozen", help="check a frozen corpus is unchanged")
+    cvf.add_argument("--cases", required=True)
+    cvf.set_defaults(func=cmd_cases_verify_frozen)
     r = sub.add_parser("run", help="run a baseline through the harness")
     r.add_argument("baseline", choices=["b1", "b2", "b3"])
     r.add_argument("--instance", required=True)

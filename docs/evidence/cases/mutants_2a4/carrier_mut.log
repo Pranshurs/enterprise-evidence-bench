@@ -1,0 +1,13 @@
+BASELINE 0 72 passed in 16.38s
+KILLED C1 carrier gate off ['test_red_arm_breaking_one_rule_is_reported_by_that_rule[carrier_across_splits]'] | 1 failed, 71 passed in 16.58s
+KILLED C2 per-split goal gate off ['test_red_arm_breaking_one_rule_is_reported_by_that_rule[split_goal_coverage]'] | 1 failed, 71 passed in 16.39s
+KILLED C3 carrier gate not called ['test_red_arm_breaking_one_rule_is_reported_by_that_rule[carrier_across_splits]', 'test_red_arm_breaking_one_rule_is_reported_by_that_rule[split_goal_coverage]', 'test_red_arm_breaking_one_rule_is_reported_by_that_rule[ool_minimum]'] | 4 failed, 68 passed in 16.76s
+KILLED B1 builder ignores carrier split ['test_built_injection_cases_read_only_their_splits_carriers'] | 1 failed, 71 passed in 16.48s
+KILLED B2 candidate cache ignores split ['test_built_injection_cases_read_only_their_splits_carriers'] | 1 failed, 71 passed in 16.14s
+SURVIVED B3 cursor ignores split [] | 72 passed in 16.41s
+KILLED B4 no carrier of every goal per split ['test_a_split_gets_a_carrier_of_every_goal_even_with_few_slots'] | 1 failed, 71 passed in 16.35s
+KILLED B5 largest remainder dropped ['test_carriers_are_split_owned_proportional_and_cover_every_goal', 'test_a_split_gets_a_carrier_of_every_goal_even_with_few_slots'] | 2 failed, 70 passed in 16.51s
+KILLED B6 order from input, not seed ['test_carrier_allocation_ignores_binding_order_and_unreadable_carriers'] | 1 failed, 71 passed in 16.53s
+KILLED B7 unreadable carriers allocated ['test_carrier_allocation_ignores_binding_order_and_unreadable_carriers'] | 1 failed, 71 passed in 15.78s
+{'KILLED': 9, 'SURVIVED': 1}
+RESTORED 0 72 passed in 16.54s

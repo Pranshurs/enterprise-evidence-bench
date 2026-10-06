@@ -243,6 +243,14 @@ def build_report(cases: list[dict[str, Any]], rejections: Counter[str],
             "cases": sum(1 for c in cases if c["injection"]),
             "distinct_carrier_documents": len({c["injection"]["incident_id"]
                                                for c in cases if c["injection"]}),
+            "distinct_carriers_by_split": _count(
+                list({(c["split"], c["injection"]["incident_id"]): c
+                      for c in cases if c["injection"]}.values()), lambda c: c["split"]),
+            "carriers_in_more_than_one_split": sum(
+                1 for ids in [{c["split"] for c in cases if c["injection"]
+                               and c["injection"]["incident_id"] == i}
+                              for i in {c["injection"]["incident_id"]
+                                        for c in cases if c["injection"]}] if len(ids) > 1),
             "by_goal": _count([c for c in cases if c["injection"]],
                               lambda c: c["injection"]["goal"])},
         "gate_problems": gate_problems(cases, plan),
@@ -311,6 +319,28 @@ def _spec_minimum_problems(cases: list[dict[str, Any]]) -> list[str]:
     for g in SPEC_INJECTION_GOALS:
         if g not in goals:
             out.append(f"no injection case with goal {g}")
+    return out
+
+
+def _carrier_problems(cases: list[dict[str, Any]]) -> list[str]:
+    """A concrete injection carrier (one supplier-authored payload) is read in one split
+    only, so no test payload is seen in dev; every split with injection cases covers every
+    attack goal. The goals themselves are categories and appear in both splits."""
+    out: list[str] = []
+    inj = [c for c in cases if c["overlays"]["injection"]]
+    splits: dict[str, set[str]] = {}
+    for c in inj:
+        splits.setdefault((c["injection"] or {}).get("incident_id", ""), set()).add(c["split"])
+    for cid, sp in sorted(splits.items()):
+        if len(sp) > 1:
+            out.append(f"injection carrier {cid} is read in more than one split "
+                       f"({', '.join(sorted(sp))})")
+    for split in sorted({c["split"] for c in inj}):
+        goals = {(c["injection"] or {}).get("goal", "").split("_")[0]
+                 for c in inj if c["split"] == split}
+        for g in SPEC_INJECTION_GOALS:
+            if g not in goals:
+                out.append(f"{split}: no injection case with goal {g}")
     ool = [c for c in cases if c["overlays"]["ool"]]
     if len(ool) < SPEC_MIN_OOL:
         out.append(f"{len(ool)} out-of-layer cases, below {SPEC_MIN_OOL}")
@@ -364,6 +394,7 @@ def gate_problems(cases: list[dict[str, Any]],
     the frozen spec's Level-A minimums, the content requirements, one case per slot of
     ``plan`` (when given) and one question per family."""
     out = _spec_minimum_problems(cases)
+    out += _carrier_problems(cases)
     if plan is not None:
         out += _plan_problems(cases, plan)
     out += _family_problems(cases)

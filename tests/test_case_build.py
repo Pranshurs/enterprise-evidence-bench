@@ -20,7 +20,14 @@ from typing import Any
 import pytest
 
 from eeb.cases import dbcheck
-from eeb.cases.build import PROBE_STRATA, CaseBuilder, family_id, probe_slots, probe_stratum
+from eeb.cases.build import (
+    PROBE_STRATA,
+    CaseBuilder,
+    carrier_splits,
+    family_id,
+    probe_slots,
+    probe_stratum,
+)
 from eeb.cases.templates import TEMPLATES, Template
 from eeb.cases.validate import (
     metric_layer_membership,
@@ -569,3 +576,95 @@ def test_row_index_is_per_principal_and_complete(data: InstanceData) -> None:
         assert all(r["supplier_id"] == k for k, rows in idx.items() for r in rows)
     assert sum(map(len, part.by("invoices", "supplier_id").values())) < sum(
         map(len, full.by("invoices", "supplier_id").values()))
+
+
+# ------------------------------------------------------------------ injection carriers
+def _carriers(n_per_goal: int) -> list[dict[str, Any]]:
+    goals = ("G1_a", "G2_b", "G3_c", "G4_d", "G5_e")
+    return [{"incident_id": f"INC-{g[:2]}-{i:02d}", "goal": g}
+            for g in goals for i in range(n_per_goal)]
+
+
+def _inj_plan(test: int, dev: int) -> list[dict[str, Any]]:
+    return ([_slot(f"t{i}", "test", "X", injection=True) for i in range(test)]
+            + [_slot(f"d{i}", "dev", "X", injection=True) for i in range(dev)]
+            + [_slot(f"o{i}", "test", "X") for i in range(7)])
+
+
+def test_carriers_are_split_owned_proportional_and_cover_every_goal() -> None:
+    carriers = _carriers(11)
+    readable = {c["incident_id"] for c in carriers}
+    out = carrier_splits(carriers, readable, _inj_plan(32, 18), SEED)
+    assert set(out) == readable                               # every readable carrier, once
+    by_split = Counter(out.values())
+    assert by_split == {"test": 35, "dev": 20}                # 55 x 32/50 and 55 x 18/50
+    for g in {c["goal"] for c in carriers}:
+        mine = {out[c["incident_id"]] for c in carriers if c["goal"] == g}
+        assert mine == {"test", "dev"}, g
+
+
+def test_carrier_allocation_ignores_binding_order_and_unreadable_carriers() -> None:
+    carriers = _carriers(6)
+    readable = {c["incident_id"] for c in carriers} - {"INC-G1-00"}
+    plan = _inj_plan(4, 2)
+    out = carrier_splits(carriers, readable, plan, SEED)
+    assert "INC-G1-00" not in out
+    assert carrier_splits(list(reversed(carriers)), readable, list(reversed(plan)), SEED) == out
+    assert carrier_splits(carriers, readable, plan, SEED + 1) != out
+
+
+def test_a_split_gets_a_carrier_of_every_goal_even_with_few_slots() -> None:
+    carriers = _carriers(3)
+    out = carrier_splits(carriers, {c["incident_id"] for c in carriers}, _inj_plan(49, 1),
+                         SEED)
+    for g in {c["goal"] for c in carriers}:
+        assert {out[c["incident_id"]] for c in carriers if c["goal"] == g} == {"test", "dev"}
+
+
+def test_built_injection_cases_read_only_their_splits_carriers(
+        cases: list[dict[str, Any]], data: InstanceData, plan: list[dict[str, Any]]) -> None:
+    b = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
+    b.build(plan)
+    inj = [c for c in cases if c["injection"]]
+    assert inj
+    for c in inj:
+        assert b.carrier_split[c["injection"]["incident_id"]] == c["split"], c["case_id"]
+
+
+def test_each_split_walks_its_own_injection_candidates(data: InstanceData,
+                                                       plan: list[dict[str, Any]]) -> None:
+    """Dev and test injection slots walk separate candidate lists with separate cursors: a
+    dev slot binding first must not move the test slot's position. Checked on every
+    template where the test slot's own first choice comes before the dev slot's (where a
+    shared cursor would skip it); at least one such template must exist."""
+    devs = [s for s in plan if s["overlays"]["injection"] and s["split"] == "dev"
+            and s["class"] == "X"][:4]
+    dev = devs[0]
+    test = next(s for s in plan if s["overlays"]["injection"] and s["split"] == "test"
+                and s["class"] == dev["class"])
+    discriminating = 0
+    for t in CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)._compatible(dev):
+        def builder(t: Template = t) -> CaseBuilder:
+            b = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
+            b.carrier_split = carrier_splits(
+                b.data.injections, {i["incident_id"] for i in b.data.injections
+                                    if b._carrier_reader(i) is not None}, plan, SEED)
+            b._compatible = lambda _s: [t]  # type: ignore[method-assign]
+            return b
+
+        both = builder()
+        try:
+            taken = [both.fill_single(sl, i) for i, sl in enumerate(devs)]
+            after = both.fill_single(test, len(devs))
+        except RuntimeError:
+            continue
+        alone = builder()
+        alone.families |= {d["family_id"] for d in taken}
+        expected = alone.fill_single(test, 1)
+        assert (after["family_id"], after["principal_id"]) == (
+            expected["family_id"], expected["principal_id"]), t.id
+        dev_pos = both._cursor[f"{t.id}|True|False|dev"]
+        test_list = [(family_id(t, sl), pid) for sl, pid, _ in both.candidates(t, True, "test")]
+        if test_list.index((expected["family_id"], expected["principal_id"])) < dev_pos - 1:
+            discriminating += 1
+    assert discriminating >= 1

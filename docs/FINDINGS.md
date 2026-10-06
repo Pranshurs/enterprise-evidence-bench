@@ -192,14 +192,43 @@ caught.**
   through that filter (`test_red_arm_off_contract_slot_filters_the_search`); the mutant
   is now caught. 45 of 45.
 
-**F-15 (observation, design decision): injection cases reuse carrier documents.** The 50
-injection cases are 50 distinct families (different questions) but read 33 distinct
-supplier-authored carrier documents; 17 cases meet a payload another case already uses.
-The spec's minimum (≥ 40 injection cases over G1–G5) is met: G1 9, G2 11, G3 13, G4 10,
-G5 7.
+**F-15: injection cases reuse carrier documents. Accepted interpretation.** The 50 injection
+cases are 50 distinct families (different questions) but read fewer distinct
+supplier-authored carrier documents (33 at the time; 32 after F-17). Reports state the real
+number of carriers, never 50 payload documents. The spec's minimum (≥ 40 injection cases
+over G1–G5) is met. Split isolation requires that no carrier cross the dev/test boundary;
+checking that found F-17.
 
-**F-16 (observation): uneven counts outside the X templates.** The representation
+**F-16: uneven counts outside the X templates. Accepted interpretation, no corpus change.** The
+at-least-6 rule targeted the X imbalance, which is resolved. Probe concentration is accepted
+with disclosure: probe results are to be reported stratified by template, role and source
+dependency, so one template cannot hide failures elsewhere. The representation
 rule is for X templates (each has at least 6). Outside X, `C.exception_threshold_now` has
 3 cases (one per currency: there are only three policy-vs-FAQ threshold conflicts) and
 `S.buyer_caused_late` 5. Probe cases lean on one template:
 `X.average_off_contract_order` holds 31 of the 72.
+
+**F-17: five injection carriers were read in both dev and test.**
+- *Defect.* Injection cases chose carriers as they were bound, without regard to split. 5
+  of the 33 carriers read by injection cases (`INC-COR-0003`, `-0005`, `-0026`, `-0031`,
+  `-0039`) were read by dev and by test cases, so a system tuned on dev would already have
+  seen those test payloads. Found while adding the split-isolation gate, before any review
+  or paraphrase.
+- *Fix (carrier split assigned before binding).*
+  `carrier_splits` assigns every readable carrier to exactly one split before any case is
+  bound: carriers are ranked by seed and carrier id within each attack goal and divided in
+  proportion to each split's injection slots, with at least one carrier of every goal in
+  each split. Injection candidates for a slot are limited to its split's carriers, with a
+  candidate list and cursor per split. What must be disjoint is the concrete carrier; the
+  attack goals G1–G5 are categories and appear in both splits.
+- *Gate.* Assembly fails if a carrier is read in more than one split or a split's
+  injection cases miss a goal. Red arms construct both violations.
+- *Result (seed 7 default).* 5/33 carriers crossed dev/test before, 0/32 after (dev 11,
+  test 21); each split covers G1–G5. 31 of the 50 injection cases were rebound, and
+  because questions are used once, 39 other cases changed question as a consequence: 70
+  cases in all (X 54, D 11, S 5), same case ids and splits. All other gates still hold;
+  probe cases are now 43 of 399 test (73 overall).
+- *Mutants.* 10 single mutants of the gate, the allocation and the builder: 9 caught on the
+  first run. The survivor shared one cursor between splits, which skips valid candidates
+  without breaking isolation; a test that binds dev slots before a test slot now catches
+  it. 10 of 10.

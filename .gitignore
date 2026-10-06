@@ -10,3 +10,4 @@ instances/
 *.partial/
 .runs/
 /cases/
+.DS_Store

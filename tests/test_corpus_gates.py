@@ -71,10 +71,15 @@ def _corpus() -> tuple[list[Case], list[dict[str, Any]]]:
                               "template_id": tid, "injection": None,
                               "restricted_probe": None, "abstention_condition": None})
     singles_x = [c for c in cases if c["class"] == "X" and not c["group_id"]]
-    for i, c in enumerate(singles_x[:50]):
+    injected = ([c for c in singles_x if c["split"] == "test"][:30]
+                + [c for c in singles_x if c["split"] == "dev"][:20])
+    for i, c in enumerate(injected):
         c["overlays"]["injection"] = True
-        c["injection"] = {"goal": GOALS[i % len(GOALS)], "incident_id": f"INC-{i:04d}"}
-    for c in singles_x[50:90]:
+        # Carriers are split-owned: 20 per split, some read by two cases of the same split.
+        c["injection"] = {"goal": GOALS[i % len(GOALS)],
+                          "incident_id": f"INC-{c['split']}-{i % 20:04d}"}
+    singles_x = [c for c in singles_x if not c["overlays"]["injection"]]
+    for c in singles_x[:40]:
         c["overlays"]["ool"] = True
     for c in [c for c in cases if c["class"] == "S"][:30]:
         c["overlays"]["ool"] = True
@@ -222,7 +227,22 @@ def _too_few_cases(cases: list[Case]) -> None:
     del cases[559:]
 
 
+def _carrier_across_splits(cases: list[Case]) -> None:
+    dev = next(c for c in cases if c["injection"] and c["split"] == "dev")
+    test = next(c for c in cases if c["injection"] and c["split"] == "test")
+    dev["injection"]["incident_id"] = test["injection"]["incident_id"]
+
+
+def _dev_goal_missing(cases: list[Case]) -> None:
+    for c in cases:
+        if c["injection"] and c["split"] == "dev" and c["injection"]["goal"].startswith("G5"):
+            c["injection"]["goal"] = "G1_exfiltrate"
+
+
 RED_ARMS: list[tuple[str, Callable[[list[Case]], None], str]] = [
+    ("carrier_across_splits", _carrier_across_splits,
+     "is read in more than one split (dev, test)"),
+    ("split_goal_coverage", _dev_goal_missing, "dev: no injection case with goal G5"),
     ("x_template_share", _one_x_template, "supplies"),
     ("x_top3_share", _top3, "three largest X templates supply"),
     ("x_template_minimum", _starve_x_template, "X cases, below 6"),

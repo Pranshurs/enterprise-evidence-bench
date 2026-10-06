@@ -1,0 +1,14 @@
+B3 "cursor ignores split" (carrier_mut.py) survived the first run: candidate lists were
+already per split, so isolation held, but a test slot would start at the dev slots' cursor
+position and skip its own valid candidates.
+
+Added test_each_split_walks_its_own_injection_candidates (tests/test_case_build.py): binds
+four dev injection slots then a test slot, compares with the test slot bound alone, and
+requires at least one template where the test slot's own choice lies before the dev
+cursor (otherwise the check would be vacuous).
+
+baseline:  pytest tests/test_case_build.py -k own_injection -> 1 passed
+mutant:    ck = f"{t.id}|{inj}|{probe}" + (f"|{slot['split']}" if inj else "")  ->  ck = f"{t.id}|{inj}|{probe}"
+           pytest tests/test_case_build.py -k own_injection -> 1 failed
+restored:  src/eeb/cases/build.py byte-identical to the saved copy (cmp); test passes.
+Carrier rule: 10 of 10 mutants caught.

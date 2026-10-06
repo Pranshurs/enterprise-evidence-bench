@@ -83,6 +83,45 @@ def probe_slots(plan: list[dict[str, Any]], seed: int,
     return out
 
 
+def carrier_splits(carriers: list[dict[str, Any]], readable: set[str],
+                   plan: list[dict[str, Any]], seed: int) -> dict[str, str]:
+    """Assign every readable injection carrier to exactly one split, before any case is
+    bound, so that no test payload is ever seen in dev.
+
+    Carriers are taken goal by goal (each goal's carriers ranked by seed and carrier id) and
+    divided between the splits in proportion to each split's injection slots, with at least
+    one carrier per goal in every split that has injection slots. Unreadable carriers (no
+    principal can read the payload) bind no case and get no split. The result depends on
+    the seed, the carrier ids and the plan only, never on the order in which slots are
+    bound."""
+    demand = Counter(s["split"] for s in plan if s["overlays"]["injection"])
+    splits = sorted(demand)
+    total = sum(demand.values())
+    out: dict[str, str] = {}
+    for goal in sorted({c["goal"] for c in carriers}):
+        ids = sorted((c["incident_id"] for c in carriers
+                      if c["goal"] == goal and c["incident_id"] in readable),
+                     key=lambda i: _rank(seed, "carrier", i))
+        if not ids or not splits:
+            continue
+        # Largest remainder over the splits, then at least one each where possible.
+        quota = {sp: len(ids) * demand[sp] // total for sp in splits}
+        rest = sorted(splits, key=lambda sp: (-(len(ids) * demand[sp] % total), sp))
+        for sp in rest[:len(ids) - sum(quota.values())]:
+            quota[sp] += 1
+        for sp in splits:
+            while quota[sp] == 0 and len(ids) >= len(splits):
+                donor = max(splits, key=lambda d: (quota[d], d))
+                quota[donor] -= 1
+                quota[sp] += 1
+        i = 0
+        for sp in splits:
+            for cid in ids[i:i + quota[sp]]:
+                out[cid] = sp
+            i += quota[sp]
+    return out
+
+
 def family_id(t: Template, slots: dict[str, Any]) -> str:
     """A family is one question: a template with its slots filled. Cases that differ only
     in who asks belong to the same family."""
@@ -106,6 +145,8 @@ class CaseBuilder:
         self._bindings: dict[str, list[dict[str, Any]]] = {}
         self._cursor: Counter[str] = Counter()
         self._cands: dict[str, list[tuple[dict[str, Any], str, Any]]] = {}
+        # Injection carrier -> the one split whose cases may read it (set by ``build``).
+        self.carrier_split: dict[str, str] = {}
 
     # ------------------------------------------------------------------ helpers
     def bindings(self, t: Template) -> list[dict[str, Any]]:
@@ -210,6 +251,11 @@ class CaseBuilder:
         inj = next((i for i in self.data.injections if i["supplier_id"] == sid), None)
         if inj is None:
             return None
+        return self._carrier_reader(inj)
+
+    def _carrier_reader(self, inj: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+        """The principal who reads this carrier's payload, if any."""
+        sid = inj["supplier_id"]
         chunk = next((c["chunk_id"] for c in self.data.chunks if c["doc_id"] == inj["doc_id"]
                       and c["section_kind"] == "supplier_response"), None)
         for pid in sorted(self.ctx.cms_by_category.get(
@@ -218,14 +264,17 @@ class CaseBuilder:
                 return pid, {**inj, "chunk_id": chunk}
         return None
 
-    def candidates(self, t: Template, injection: bool) -> list[tuple[dict[str, Any], str, Any]]:
-        key = f"{t.id}|{injection}"
+    def candidates(self, t: Template, injection: bool, split: str | None = None
+                   ) -> list[tuple[dict[str, Any], str, Any]]:
+        """Bindings with their principal. An injection candidate for ``split`` reads only a
+        carrier assigned to that split."""
+        key = f"{t.id}|{injection}|{split if injection else None}"
         if key not in self._cands:
             out: list[tuple[dict[str, Any], str, Any]] = []
             for slots in self.bindings(t):
                 if injection:
                     got = self._injection_principal(slots)
-                    if got is None:
+                    if got is None or self.carrier_split.get(got[1]["incident_id"]) != split:
                         continue
                     out.append((slots, got[0], got[1]))
                 else:
@@ -250,10 +299,10 @@ class CaseBuilder:
             raise RuntimeError(f"no template for slot {slot['case_id']}")
         inj = slot["overlays"]["injection"]
         for t in self._least_used_first(templates, index):
-            cands = self.candidates(t, inj)
+            cands = self.candidates(t, inj, slot["split"])
             # Probe slots walk the candidates with their own cursor, so a candidate they
             # pass over (a principal who sees everything) stays available to other slots.
-            ck = f"{t.id}|{inj}|{probe}"
+            ck = f"{t.id}|{inj}|{probe}" + (f"|{slot['split']}" if inj else "")
             while self._cursor[ck] < len(cands):
                 slots, pid, injection = cands[self._cursor[ck]]
                 self._cursor[ck] += 1
@@ -340,6 +389,9 @@ class CaseBuilder:
         return None
 
     def build(self, plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        readable = {i["incident_id"] for i in self.data.injections
+                    if self._carrier_reader(i) is not None}
+        self.carrier_split = carrier_splits(self.data.injections, readable, plan, self.seed)
         by_group: dict[str, dict[str, dict[str, Any]]] = {}
         for slot in plan:
             if slot["group_id"]:

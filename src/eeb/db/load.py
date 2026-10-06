@@ -145,6 +145,10 @@ def build_database(admin_dsn: str, instance: Path, ns: str) -> None:
                              a["param_value"], a["valid_from"], a["valid_to"]))
             for stmt in sqlgen.security_sql(ns, ns, policy, principals, assignments, today):
                 conn.execute(stmt)
+            from eeb.metrics.layer import view_ddl
+
+            for stmt in view_ddl(ns):
+                conn.execute(stmt)
         conn.execute("ANALYZE")
 
 

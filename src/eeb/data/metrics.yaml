@@ -1,0 +1,81 @@
+# Governed metric layer (spec §4.4). FIXED catalog, predeclared for the §13 experiment.
+#
+# Every metric compiles to one SELECT over one view in schema eeb_m. The views are
+# security_invoker and owned by an unprivileged NOLOGIN role, so a metric sees exactly
+# what the asking principal sees (RLS and column grants of the caller), never more.
+#
+# The compiler accepts only: a metric name from this file, dimensions and filters
+# declared for that metric, and filter values matching [A-Za-z0-9_-]+ (bound as
+# parameters). There is no free-form expression, column, join or predicate, so the layer
+# is not a route to arbitrary SQL.
+#
+# Deliberately NOT expressible here (material for out-of-metric-layer questions):
+# - SLA-adjusted on-time delivery (delay causes, incidents, exclusions);
+# - service-credit computation;
+# - contract price schedule and price variance against it;
+# - off-contract threshold compliance and exceptions;
+# - FX conversion;
+# - payment-term compliance;
+# - anything over documents.
+version: 1
+metrics:
+  invoiced_amount:
+    definition: >-
+      Sum of invoice line amounts (accepted quantity multiplied by unit price) in the
+      invoice currency. Amounts in different currencies are never added together.
+    view: invoice_lines
+    measure: "round(sum(amount), 2)"
+    dimensions: [supplier_id, invoice_bu_id, invoice_quarter, currency]
+    filters: [supplier_id, invoice_bu_id, invoice_quarter, po_id, currency]
+    always_group_by: [currency]
+  ordered_amount:
+    definition: >-
+      Sum of purchase-order line value (quantity multiplied by unit price) in the order
+      currency, by the quarter of the order date.
+    view: po_lines
+    measure: "round(sum(qty * unit_price), 2)"
+    dimensions: [supplier_id, bu_id, cost_center_id, order_quarter, currency, off_contract]
+    filters: [supplier_id, bu_id, cost_center_id, order_quarter, currency, off_contract, po_id]
+    always_group_by: [currency]
+  effective_unit_cost:
+    definition: >-
+      Quantity-weighted average unit price paid on purchase-order lines, per item, by the
+      quarter of the order date, in the order currency.
+    view: po_lines
+    measure: "round(sum(qty * unit_price) / nullif(sum(qty), 0), 4)"
+    dimensions: [supplier_id, item_id, order_quarter, currency]
+    filters: [supplier_id, item_id, order_quarter, currency]
+    always_group_by: [item_id, currency]
+  po_count:
+    definition: Number of distinct purchase orders.
+    view: po_lines
+    measure: "count(DISTINCT po_id)"
+    dimensions: [supplier_id, bu_id, order_quarter, off_contract]
+    filters: [supplier_id, bu_id, order_quarter, off_contract]
+    always_group_by: []
+  raw_on_time_delivery_pct:
+    definition: >-
+      Share of purchase-order lines with a promised date in the quarter whose goods
+      receipt date is on or before the promised date. Lines without a receipt count as not
+      on time. This is the RAW rate: no contractual exclusions are applied.
+    view: deliveries
+    measure: >-
+      round(100.0 * count(*) FILTER (WHERE received_date <= promised_date) / count(*), 2)
+    dimensions: [supplier_id, bu_id, promised_quarter]
+    filters: [supplier_id, bu_id, promised_quarter]
+    always_group_by: []
+  rejection_rate_pct:
+    definition: Rejected quantity as a share of received quantity on goods receipts.
+    view: deliveries
+    measure: >-
+      round(100.0 * sum(qty_rejected) / nullif(sum(qty_received), 0), 2)
+    dimensions: [supplier_id, bu_id, promised_quarter]
+    filters: [supplier_id, bu_id, promised_quarter]
+    always_group_by: []
+  budget_amount:
+    definition: Budgeted amount per cost center and quarter, in the business-unit currency.
+    view: budgets
+    measure: "round(sum(amount), 2)"
+    dimensions: [cost_center_id, quarter, currency]
+    filters: [cost_center_id, quarter, currency]
+    always_group_by: [currency]

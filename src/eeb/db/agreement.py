@@ -234,6 +234,44 @@ def logging_checks(admin_dsn: str, ns: str, principal_ids: list[str]) -> list[st
     return problems
 
 
+def metric_layer_checks(admin_dsn: str, ns: str) -> list[str]:
+    """The metric layer can never act with more than the caller's authority."""
+    from eeb.metrics.layer import METRIC_SCHEMA, VIEWS, owner_role
+
+    problems: list[str] = []
+    with admin(admin_dsn, ns) as conn:
+        rows = conn.execute(
+            "SELECT c.relname, c.relkind, c.reloptions, pg_get_userbyid(c.relowner) "
+            "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = %s", (METRIC_SCHEMA,)).fetchall()
+        names = {r[0] for r in rows}
+        if names != set(VIEWS):
+            problems.append(f"{METRIC_SCHEMA} objects differ from the declared views: "
+                            f"{sorted(names ^ set(VIEWS))}")
+        for name, kind, options, owner in rows:
+            if kind != "v":
+                problems.append(f"{name}: not a view")
+            if "security_invoker=true" not in (options or []):
+                problems.append(f"{name}: not security_invoker")
+            if owner != owner_role(ns):
+                problems.append(f"{name}: owned by {owner}")
+        attrs = conn.execute("SELECT rolsuper, rolbypassrls, rolcanlogin FROM pg_roles "
+                             "WHERE rolname = %s", (owner_role(ns),)).fetchone()
+        if attrs is None or any(attrs):
+            problems.append(f"metric owner role has privileged attributes: {attrs}")
+        for t in TABLES:
+            if conn.execute("SELECT has_table_privilege(%s, %s, 'SELECT')",
+                            (owner_role(ns), f"{SCHEMA}.{t.name}")).fetchone()[0]:  # type: ignore[index]
+                problems.append(f"metric owner can read {t.name}")
+        definers = conn.execute(
+            "SELECT n.nspname || '.' || p.proname FROM pg_proc p JOIN pg_namespace n "
+            "ON n.oid = p.pronamespace WHERE p.prosecdef AND n.nspname NOT IN "
+            "('pg_catalog', 'information_schema')").fetchall()
+        if definers:
+            problems.append(f"SECURITY DEFINER functions present: {[d[0] for d in definers]}")
+    return problems
+
+
 def check(admin_dsn: str, instance: Path, ns: str) -> Agreement:
     meta = read_instance(instance)
     principals = [p["principal_id"] for p in read_jsonl(instance / "principals.jsonl")]
@@ -246,7 +284,7 @@ def check(admin_dsn: str, instance: Path, ns: str) -> Agreement:
     return Agreement(
         disagreements=compare(db, ora),
         hardening=hardening_checks(admin_dsn, ns, principals)
-        + logging_checks(admin_dsn, ns, principals),
+        + logging_checks(admin_dsn, ns, principals) + metric_layer_checks(admin_dsn, ns),
         db_digest=summarize_outcome(db)["digest"],
         oracle_digest=summarize_outcome(ora)["digest"],
         recorded_digest=meta["authorization_outcome_digest"],

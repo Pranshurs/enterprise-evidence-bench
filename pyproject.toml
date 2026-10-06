@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "enterprise-evidence-bench"
-version = "0.0.1.dev0"
+version = "0.1.0a0"
 description = "Cross-source enterprise evidence benchmark: relational data + governed documents under per-principal authorization."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,6 +18,9 @@ dependencies = [
     "httpx>=0.27",
     "sqlglot>=26",
 ]
+
+[project.urls]
+Repository = "https://github.com/Pranshurs/enterprise-evidence-bench"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "types-PyYAML"]

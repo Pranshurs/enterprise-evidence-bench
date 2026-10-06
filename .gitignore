@@ -11,3 +11,4 @@ instances/
 .runs/
 /cases/
 .DS_Store
+/runs/

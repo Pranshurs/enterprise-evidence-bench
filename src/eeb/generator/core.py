@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
-GENERATOR_VERSION = "2a.2"
+GENERATOR_VERSION = "2a.3"
 COMPANY = "ExampleCo"  # fictional
 SYNTHETIC_MARKER = (
     "SYNTHETIC DATA. ExampleCo and every supplier, person, contract and figure in this "
@@ -94,6 +94,8 @@ class Instance:
     canaries: list[dict[str, Any]] = field(default_factory=list)
     sensitive_values: list[dict[str, Any]] = field(default_factory=list)
     scenarios: list[dict[str, Any]] = field(default_factory=list)
+    injections: list[dict[str, Any]] = field(default_factory=list)
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
 
 
 CENT = Decimal("0.01")

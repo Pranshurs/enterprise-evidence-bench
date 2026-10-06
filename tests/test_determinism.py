@@ -15,7 +15,7 @@ from eeb.generator.instance import build_instance_files
 
 # Recorded once; every supported Python version must reproduce it (run on the 3.11-3.14
 # matrix). Any intended generator change must update it together with GENERATOR_VERSION.
-GOLDEN_SMALL_SEED7 = "8a353d9d9a498a9224f0f850fecbd1f9446ed53368307e40ecc00d874143e881"
+GOLDEN_SMALL_SEED7 = "4043db62cc058c6e8ee13566598fd87bc17d23a5491874f854bb63d796d7c931"
 
 
 def test_same_seed_gives_byte_identical_artifacts(files: dict[str, bytes]) -> None:

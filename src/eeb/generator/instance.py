@@ -66,6 +66,18 @@ def generate(cfg: Config) -> tuple[Instance, dict[str, Any]]:
     DocumentBuilder(inst, world, db.mint).build()
     principal_gen.build(inst)
     inst.scenarios = Gold(inst, world).build()
+    inst.injections = sorted(world.injections, key=lambda x: x["incident_id"])
+    inst.conflicts = sorted(
+        [{"kind": "payment_terms", "contract_id": c.contract_id, "supplier_id": c.supplier_id,
+          "system_value": c.payment_terms_days, "document_value": c.doc_payment_terms_days,
+          "doc_id": f"DOC-MSA-{c.contract_id}"}
+         for c in world.contracts.values() if c.doc_payment_terms_days is not None]
+        + [{"kind": "force_majeure", "incident_id": i["incident_id"],
+            "supplier_id": i["supplier_id"], "system_value": i["force_majeure"],
+            "document_value": i["report_force_majeure"],
+            "doc_id": f"DOC-INC-{i['incident_id']}"}
+           for i in world.incidents if i["force_majeure"] != i["report_force_majeure"]],
+        key=lambda x: (x["kind"], x.get("contract_id") or x.get("incident_id")))
     for name, rows in inst.tables.items():
         rows.sort(key=_sort_key(name))
     missing = {t.name for t in TABLES} - set(inst.tables)
@@ -192,6 +204,8 @@ def render_files(inst: Instance, policy_raw: bytes, plan: list[dict[str, Any]],
     files["gold/scenario_facts.jsonl"] = canonical.jsonl(
         sorted(inst.scenarios, key=lambda f: f["fact_id"]))
     files["cases/plan.jsonl"] = canonical.jsonl(plan)
+    files["registry/injections.jsonl"] = canonical.jsonl(inst.injections)
+    files["registry/conflicts.jsonl"] = canonical.jsonl(inst.conflicts)
     files["authorization/outcome.json"] = (canonical.dumps(outcome) + "\n").encode()
     return files
 

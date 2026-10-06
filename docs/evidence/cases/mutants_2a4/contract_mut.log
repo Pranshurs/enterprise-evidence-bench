@@ -1,0 +1,10 @@
+BASELINE 0 78 passed in 16.95s
+KILLED G1 money currency not required at build ['test_money_fact_without_currency_stops_the_build'] | 1 failed, 77 passed in 16.96s
+KILLED G2 contract error is a ValueError ['test_money_fact_without_currency_stops_the_build'] | 1 failed, 77 passed in 16.83s
+KILLED G3 kinds from direct inputs (F-19 reintroduced) ['test_required_citation_kinds_come_from_the_whole_evidence_chain'] | 1 failed, 77 passed in 17.77s
+KILLED G4 declared kinds not compared ['test_required_citation_kinds_come_from_the_whole_evidence_chain'] | 1 failed, 77 passed in 18.00s
+KILLED G5 corpus gate: money currency off ['test_red_arm_breaking_one_rule_is_reported_by_that_rule[money_currency]'] | 1 failed, 77 passed in 18.04s
+KILLED G6 corpus gate: kinds off ['test_red_arm_breaking_one_rule_is_reported_by_that_rule[required_kinds]', 'test_red_arm_breaking_one_rule_is_reported_by_that_rule[required_missing]'] | 2 failed, 76 passed in 17.96s
+KILLED G7 corpus gate not called ['test_red_arm_breaking_one_rule_is_reported_by_that_rule[money_currency]', 'test_red_arm_breaking_one_rule_is_reported_by_that_rule[required_kinds]', 'test_red_arm_breaking_one_rule_is_reported_by_that_rule[required_missing]'] | 3 failed, 75 passed in 17.82s
+{'KILLED': 7}
+RESTORED 0 78 passed in 17.64s

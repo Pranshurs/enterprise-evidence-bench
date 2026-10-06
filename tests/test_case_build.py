@@ -668,3 +668,28 @@ def test_each_split_walks_its_own_injection_candidates(data: InstanceData,
         if test_list.index((expected["family_id"], expected["principal_id"])) < dev_pos - 1:
             discriminating += 1
     assert discriminating >= 1
+
+
+# ------------------------------------------------------------------ gold contract (F-18, F-19)
+def test_money_fact_without_currency_stops_the_build() -> None:
+    from eeb.cases import facts as F
+    with pytest.raises(F.GoldContractError, match="needs its currency"):
+        F.sql_fact("x", "money", Decimal(1), "SELECT 1", {}, None)
+    with pytest.raises(F.GoldContractError, match="needs its currency"):
+        F.derived_fact("y", "money", Decimal(1), "sum", ["x"], "USD")
+    assert F.sql_fact("x", "money", Decimal(1), "SELECT 1", {}, "EUR")["unit"] == "EUR"
+    assert not issubclass(F.GoldContractError, ValueError)  # never a rejected candidate
+
+
+def test_required_citation_kinds_come_from_the_whole_evidence_chain() -> None:
+    from eeb.cases import facts as F
+    from eeb.cases.templates import _answer
+    t = {"fact_id": "t", "source": "doc", "kind": "money", "unit": "EUR", "value": 1}
+    v = F.sql_fact("v", "money", Decimal(5), "SELECT 5", {}, "EUR")
+    n = F.sql_fact("n", "number", Decimal(2), "SELECT 2", {})
+    avg = F.derived_fact("avg", "money", Decimal(2.5), "divide", ["v", "n"], "EUR")
+    above = F.derived_fact("above", "boolean", True, "greater_than", ["avg", "t"])
+    g = _answer([t, v, n, avg, above], ["above"])
+    assert g["required_citations"] == [{"fact_id": "above", "kinds": ["doc", "sql"]}]
+    with pytest.raises(F.GoldContractError, match="differ from its evidence"):
+        _answer([t, v, n, avg, above], ["above"], {"above": ["doc"]})

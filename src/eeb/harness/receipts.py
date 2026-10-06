@@ -29,7 +29,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -78,9 +78,16 @@ def cursor_digest(cur: Any, rows: Sequence[Sequence[Any]], ordered: bool = False
     return result_digest(cols, rows, ordered)
 
 
-def _execute(dsn: str, sql: str, params: Any,
-             ordered: bool = False) -> tuple[str | None, str | None]:
-    """(digest, error_state) for a read-only, rolled-back execution."""
+@dataclass
+class _Result:
+    digest: str | None
+    state: str | None
+    columns: list[str]
+    rows: list[dict[str, Any]]
+
+
+def _execute(dsn: str, sql: str, params: Any, ordered: bool = False) -> _Result:
+    """Digest (or error state) and normalized rows of a read-only, rolled-back execution."""
     with psycopg.connect(dsn) as conn:
         try:
             conn.execute("BEGIN READ ONLY")
@@ -88,10 +95,12 @@ def _execute(dsn: str, sql: str, params: Any,
             cur = conn.execute(sql, params)
             rows = cur.fetchmany(MAX_ROWS + 1) if cur.description else []
             if len(rows) > MAX_ROWS:
-                return None, "too_large"
-            return cursor_digest(cur, rows, ordered), None
+                return _Result(None, "too_large", [], [])
+            cols = [d.name for d in (cur.description or [])]
+            return _Result(cursor_digest(cur, rows, ordered), None, cols,
+                           [dict(zip(cols, map(_value, r), strict=True)) for r in rows])
         except errors.Error as e:
-            return None, e.sqlstate or type(e).__name__
+            return _Result(None, e.sqlstate or type(e).__name__, [], [])
         finally:
             conn.rollback()
 
@@ -115,6 +124,9 @@ class ReceiptCheck:
     error_state: str | None
     executed_by_sut: bool
     detail: str = ""
+    # The harness's own result, kept only when verified: what SQL citations are checked on.
+    columns: list[str] = field(default_factory=list)
+    rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 def verify_receipt(admin_dsn: str, ns: str, principal_id: str, receipt: dict[str, Any],
@@ -132,12 +144,14 @@ def verify_receipt(admin_dsn: str, ns: str, principal_id: str, receipt: dict[str
                    for s in statements)
     twin = dsn_for(admin_dsn, ns, sqlgen.verifier_role(ns, principal_id),
                    sqlgen.verifier_password(ns, principal_id))
-    digest, state = _execute(twin, sql, params, ordered)
+    res = _execute(twin, sql, params, ordered)
+    digest, state = res.digest, res.state
     if digest == claimed:
-        return ReceiptCheck(rid, "verified", None, executed)
+        return ReceiptCheck(rid, "verified", None, executed, columns=res.columns,
+                            rows=res.rows)
     if mode == "S":
         svc = dsn_for(admin_dsn, ns, sqlgen.service_role(ns), sqlgen.service_password(ns))
-        svc_digest, _ = _execute(svc, sql, params, ordered)
+        svc_digest = _execute(svc, sql, params, ordered).digest
         if svc_digest == claimed:
             return ReceiptCheck(rid, "authorization_exceeded", state, executed,
                                 "result reproducible only with the service login")

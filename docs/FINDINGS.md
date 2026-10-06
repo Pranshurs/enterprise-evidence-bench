@@ -232,3 +232,51 @@ rule is for X templates (each has at least 6). Outside X, `C.exception_threshold
   first run. The survivor shared one cursor between splits, which skips valid candidates
   without breaking isolation; a test that binds dev slots before a test slot now catches
   it. 10 of 10.
+
+## Scorers
+
+**F-18: money gold facts without a currency.**
+- *Defect.* Nine money facts (`invoiced_amount` in two templates, `rebate_amount`,
+  `unpaid_amount`, `late_line_value`, `credit_base`, `credit_amount`, `unit_cost_before`,
+  `unit_cost_after`) carried `unit: null`. The spec gives money facts a currency (§6.2)
+  and scores answers as correct only when the currency is consistent (§10.2), so these
+  facts could not be scored as the spec says.
+- *Found by.* The scorers' clean arm: a gold-perfect response for each case must score
+  perfectly; 77 cases of these templates did not.
+- *Impact on values.* None. Every supplier orders and invoices in one currency (61 of 61
+  suppliers; 36,024 of 36,024 invoices in the supplier's currency), so the sums were in one
+  currency; only the label was missing.
+- *Fix.* Money facts take the supplier's trading currency. Building a money fact without
+  one of INR, EUR, GBP raises `GoldContractError`, which is not a `ValueError`: the builder
+  counts `ValueError`s as rejected candidates, and a contract breach must stop the build,
+  not quietly remove cases.
+
+**F-19: required citations narrower than the evidence.**
+- *Defect.* For a derived fact, the required citation kinds were the sources of its direct
+  inputs only. When the SQL lay one level deeper (`average_above_threshold` rests on
+  `average_order_value`, which rests on SQL), only `doc` was required: 63 cases of
+  `X.average_off_contract_order`, `X.indexation_observed` and
+  `X.service_credit_entitlement`. Spec §6.3: an entitlement figure requires citing the
+  clause and the cells it is computed from.
+- *Found by.* The clean arm (SQL execution correctness was 0 for a gold-perfect response
+  that cited only what the case required).
+- *Fix.* Required kinds are the sources of the fact's whole evidence closure (derived
+  inputs and declared parameters, transitively). A template that also states kinds must
+  agree, or the build stops.
+- *Gate.* Corpus assembly re-derives both rules independently of the builder: every money
+  fact names a currency; every answer fact has a required citation whose kinds equal its
+  evidence sources. On the corpus committed at `060daaa` the gate reports 221 problems;
+  after the fix, 0.
+- *Result (seed 7 default).* 112 cases changed in `gold_facts` (units) and
+  `required_citations` only; no case changed question, principal or family.
+
+**F-20: source selection accepted another fact's citations.**
+- *Defect.* §10.6 source selection was computed as "every required kind appears among the
+  kinds of satisfied requirements". A case requiring doc+sql for one fact and doc for
+  another passed when the first fact's claim cited only the document, because the second
+  fact supplied the `doc` kind and some other claim the `sql` kind.
+- *Found by.* A red arm written for a surviving scorer mutant (C12): drop one of two
+  required kinds from one claim.
+- *Fix.* Source selection holds only when every required citation is satisfied, per fact
+  (ADR-0008 item 9 already said so; the code did not). Mutant K0 reintroduces the old rule
+  and is caught.

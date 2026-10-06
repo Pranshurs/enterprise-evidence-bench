@@ -1,0 +1,86 @@
+{
+  "byte_identical_A_vs_B": true,
+  "case_corpus": {
+    "byte_identical_A_vs_B": true,
+    "counts": {
+      "cases": 665,
+      "dev": 266,
+      "pending_rephrase_test": 89,
+      "review_set": 70,
+      "test": 399
+    },
+    "files_compared": 5,
+    "files_sha256": {
+      "BUILD_REPORT.json": "155b7b6201134580b353762a270937b9b95bdc5d9515ff2939f1248df555715f",
+      "cases.jsonl": "6c2e3c58ea718325e098139b5951c41c503cbad44f3be89e0f292ea1e6751e2a",
+      "rephrase_queue.jsonl": "7e1bd02c11e57950f1e56a8367ff1b003124b31ff9ed32a1e67795aae05f8a14",
+      "review_set.jsonl": "453f8381d99ae3e2705e12243ec1740f427c33450c4f128f6ca41355df2d5982"
+    },
+    "gold_sql_check": {
+      "principals": [
+        "ap_eu",
+        "ap_in",
+        "ap_uk",
+        "buyer_eu",
+        "buyer_in",
+        "cm_elc",
+        "cm_met",
+        "cm_moved",
+        "cm_multi",
+        "fin_ctrl",
+        "legal",
+        "risk"
+      ],
+      "restricted_probes_checked": 104,
+      "sql_facts_checked": 427,
+      "status": "passed"
+    },
+    "rebuild_problems": [],
+    "status": "UNFROZEN"
+  },
+  "containers": {
+    "A": "509c51c2a9e7",
+    "B": "a2dfdc2d2ea4"
+  },
+  "files_compared": 445,
+  "instance_digest": "51e44c72d5c33f36647f4d0d7b377e50d34ef0cb94adad00d023ec2c88bf791f",
+  "procedure": "eeb build --seed 7 --scale default on fresh postgres:17 container A (JSON statement logging); container destroyed; same build on fresh container B; eeb verify of instance A on container B; eeb cases build on each container; eeb cases verify of corpus A against a rebuild",
+  "validation_A": {
+    "authorization_outcome_digest": {
+      "database": "1eb3b4c1d4e8988056feca275984b527aa823950e69b266300aba81c9f8efe6d",
+      "oracle": "1eb3b4c1d4e8988056feca275984b527aa823950e69b266300aba81c9f8efe6d",
+      "recorded": "1eb3b4c1d4e8988056feca275984b527aa823950e69b266300aba81c9f8efe6d",
+      "verifier_twins": "1eb3b4c1d4e8988056feca275984b527aa823950e69b266300aba81c9f8efe6d"
+    },
+    "database_reload_identical": true,
+    "disagreements": 0,
+    "gold_sql": {
+      "mismatches": [],
+      "sql_facts_checked": 29
+    },
+    "hardening_problems": 0,
+    "passed": true,
+    "service_outcome_digest": "3eedcee9dc2bddb857972d545db46b6112b134ab072a849486ea9eeb749751a2",
+    "service_problems": 0,
+    "twin_disagreements": 0
+  },
+  "verify_A_on_B": {
+    "authorization_outcome_digest": {
+      "database": "1eb3b4c1d4e8988056feca275984b527aa823950e69b266300aba81c9f8efe6d",
+      "oracle": "1eb3b4c1d4e8988056feca275984b527aa823950e69b266300aba81c9f8efe6d",
+      "recorded": "1eb3b4c1d4e8988056feca275984b527aa823950e69b266300aba81c9f8efe6d",
+      "verifier_twins": "1eb3b4c1d4e8988056feca275984b527aa823950e69b266300aba81c9f8efe6d"
+    },
+    "database_reload_identical": true,
+    "disagreements": 0,
+    "gold_sql": {
+      "mismatches": [],
+      "sql_facts_checked": 29
+    },
+    "hardening_problems": 0,
+    "passed": true,
+    "service_outcome_digest": "3eedcee9dc2bddb857972d545db46b6112b134ab072a849486ea9eeb749751a2",
+    "service_problems": 0,
+    "twin_disagreements": 0
+  }
+}

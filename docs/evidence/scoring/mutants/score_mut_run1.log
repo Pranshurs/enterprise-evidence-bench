@@ -1,0 +1,41 @@
+BASELINE 0 44 passed in 17.85s
+KILLED V1 tolerance ignored ['test_value_at_the_tolerance_edge_is_correct'] | 1 failed, 43 passed in 17.15s
+KILLED V2 tolerance strict ['test_clean_arm_every_case_scores_perfectly', 'test_value_at_the_tolerance_edge_is_correct', 'test_clean_arm_on_receipts_the_harness_re_executes'] | 3 failed, 41 passed in 17.02s
+KILLED V3 currency not required ['test_red_arm_money_without_currency_is_not_correct'] | 1 failed, 43 passed in 16.33s
+KILLED V4 boolean compares truthiness ['test_clean_arm_every_case_scores_perfectly', 'test_value_at_the_tolerance_edge_is_correct', 'test_clean_arm_on_receipts_the_harness_re_executes'] | 3 failed, 41 passed in 16.19s
+SURVIVED V5 unit mismatch accepted [] | 44 passed in 16.10s
+KILLED O1 contract violations ignored ['test_red_arm_contract_violation_is_invalid[outcome]', 'test_red_arm_contract_violation_is_invalid[claims-type]', 'test_red_arm_contract_violation_is_invalid[citation-kind]'] | 6 failed, 38 passed in 16.49s
+KILLED O2 citation shape unchecked ['test_red_arm_contract_violation_is_invalid[citation-kind]', 'test_red_arm_contract_violation_is_invalid[citation-type]'] | 2 failed, 42 passed in 15.99s
+KILLED F1 correct facts counted from any fact ['test_red_arm_abstaining_on_an_answer_case_is_a_false_abstain', 'test_red_arm_contract_violation_is_invalid[null]', 'test_red_arm_contract_violation_is_invalid[list]'] | 12 failed, 32 passed in 16.40s
+KILLED F2 wrong facts never counted ['test_red_arm_wrong_value_is_not_correct_and_is_a_wrong_fact'] | 1 failed, 43 passed in 16.12s
+KILLED C1 grant not checked ['test_red_arm_document_span_not_granted'] | 1 failed, 43 passed in 16.17s
+KILLED C2 effectiveness not checked ['test_red_arm_superseded_version_is_stale'] | 1 failed, 43 passed in 16.33s
+KILLED C3 span content not checked ['test_red_arm_bad_document_citation[elsewhere-in-chunk]', 'test_red_arm_undisclosed_conflict'] | 2 failed, 42 passed in 16.19s
+KILLED C4 span bounds not checked ['test_red_arm_bad_document_citation[outside]'] | 1 failed, 43 passed in 16.11s
+KILLED C5 header spans accepted ['test_red_arm_bad_document_citation[header]'] | 1 failed, 43 passed in 16.10s
+KILLED C6 receipt status ignored ['test_red_arm_bad_sql_citation[mismatch]', 'test_red_arm_bad_sql_citation[authz-exceeded]', 'test_red_arm_receipt_computed_with_wider_rights_is_not_verified'] | 3 failed, 41 passed in 16.16s
+KILLED C7 missing receipt accepted ['test_red_arm_bad_sql_citation[missing]'] | 1 failed, 43 passed in 16.14s
+KILLED C8 cells not checked ['test_red_arm_bad_sql_citation[wrong-cells]', 'test_red_arm_reported_rows_are_not_trusted'] | 2 failed, 42 passed in 16.16s
+KILLED C9 cited columns not checked ['test_red_arm_bad_sql_citation[wrong-column]'] | 1 failed, 43 passed in 16.18s
+SURVIVED C10 SUT rows trusted [] | 44 passed in 16.20s
+KILLED C11 uncited spans ignored ['test_red_arm_number_in_prose_without_a_claim_is_uncited'] | 1 failed, 43 passed in 16.51s
+SURVIVED C12 required kinds not all needed [] | 44 passed in 15.99s
+KILLED C13 unsupported not counted ['test_red_arm_uncited_claim_is_unsupported'] | 1 failed, 43 passed in 16.33s
+KILLED S1 exec correctness from any receipt ['test_clean_arm_every_case_scores_perfectly', 'test_value_at_the_tolerance_edge_is_correct', 'test_red_arm_bad_sql_citation[missing]'] | 13 failed, 31 passed in 7.06s
+KILLED S2 harmful successes not split ['test_red_arm_harmful_statements_are_counted'] | 1 failed, 43 passed in 16.10s
+KILLED K1 one-sided conflict accepted ['test_red_arm_undisclosed_conflict'] | 1 failed, 43 passed in 16.11s
+KILLED K2 clarify axis ignored ['test_red_arm_bad_clarification[axis]'] | 1 failed, 43 passed in 16.20s
+KILLED K3 range options unchecked ['test_red_arm_bad_clarification[outside-range]'] | 1 failed, 43 passed in 16.24s
+KILLED K4 enum option subset accepted ['test_red_arm_bad_clarification[drop-option]'] | 1 failed, 43 passed in 16.13s
+KILLED L1 probe value never flagged ['test_red_arm_returning_the_unauthorized_value'] | 1 failed, 43 passed in 16.12s
+KILLED I1 suppress never succeeds ['test_red_arm_injection_success_per_goal'] | 1 failed, 43 passed in 16.17s
+KILLED I2 carrier citation ignored ['test_laundered_citation_of_the_carrier_is_success'] | 1 failed, 43 passed in 16.08s
+KILLED I3 canary goal not observed ['test_red_arm_injection_success_per_goal', 'test_canary_goal_without_a_canary_list_is_unobserved'] | 2 failed, 42 passed in 16.18s
+SURVIVED I4 collision reported as failure [] | 44 passed in 16.21s
+KILLED A1 masking keeps numbers ['test_abstention_class_masks_entities'] | 1 failed, 43 passed in 16.55s
+KILLED W1 Wilson centre wrong ['test_wilson_interval_known_values'] | 1 failed, 43 passed in 16.13s
+KILLED W2 unobserved leaks as zero ['test_unscanned_leaks_are_null_not_zero'] | 1 failed, 43 passed in 16.11s
+KILLED W3 false answer counts abstains ['test_red_arm_answering_an_abstain_case_is_a_false_answer'] | 1 failed, 43 passed in 16.09s
+KILLED W4 probe strata dropped ['test_red_arm_returning_the_unauthorized_value'] | 1 failed, 43 passed in 16.16s
+{'SURVIVED': 4, 'KILLED': 34}
+RESTORED 0 44 passed in 16.02s

@@ -14,7 +14,9 @@ baselines have not been run. No result about any system is claimed here.
 
 Records are kept unchanged per build: `cross_version_digests.json` and
 `fresh_container_closure.json` (generator label 2a.3, commit `656edb7`); `_2a4` (commit
-`e66ae00`, before F-17); `_f17` (this build, injection carriers split-owned).
+`e66ae00`, before F-17); `_f17` (commit `060daaa`, injection carriers split-owned); `_f19`
+(this build: money facts carry their currency, F-18; required citations equal the
+evidence, F-19).
 
 ## What was built
 
@@ -35,7 +37,7 @@ about 70 s of case building, 2 min 47 s wall time including two database builds.
 | active templates | 33, every one binding at least one case; `S.unpaid_invoices` retired |
 | X templates | 12; largest 41/285 (14.7%), three largest 125/285 (43.9%), smallest 6 |
 | restricted-value probes | 73 cases; 43 of 399 test cases (10.8%) |
-| `cases.jsonl` sha256 | `3bea39baf95d69fa6f043c3d70d723626097b41d75cc9e5a862a3ea4e441afa4` |
+| `cases.jsonl` sha256 | `6c2e3c58ea718325e098139b5951c41c503cbad44f3be89e0f292ea1e6751e2a` |
 | metric catalog | version 2, sha256 `2d031cde…` |
 
 X cases per template: `X.raw_otd_met_target` 42, `X.rejection_within_threshold` 42,
@@ -63,6 +65,9 @@ that decides the corpus, and the content-gate summary.
 - **Metric-layer membership.** All 70 designated out-of-layer cases are not reconstructible
   by any governed metric query in the search space; all 260 designated in-layer S and X
   cases are.
+- **Gold contract.** Every money fact names its currency; every answer fact has a required
+  citation whose kinds equal the sources of its whole evidence closure (re-derived at
+  assembly independently of the builder). 0 problems; 221 on the corpus before F-18/F-19.
 - **Injection carriers.** Every carrier is assigned to one split before binding (seed and
   carrier id, per attack goal, in proportion to each split's injection slots). 0 of 32
   carriers are read in both splits; each split covers G1–G5. Before F-17: 5 of 33 crossed.
@@ -70,19 +75,19 @@ that decides the corpus, and the content-gate summary.
   the asking principal's own login (12 principals): 0 mismatches, 0 errors. 104 restricted
   probe values re-executed with administrator rights: all match.
 - **Determinism.** The development build and the evidence build give the same
-  `cases.jsonl` bytes (`3bea39ba…`).
+  `cases.jsonl` bytes (`6c2e3c58…`).
 - **Cross-interpreter identity.** Python 3.11.17, 3.12.13, 3.13.16 and 3.14.8 emit identical
   bytes for seed 7 small (`d66e4d65…`, 146 files), seed 1234 small (`c54cb2d2…`), seed 11
   default (`2f55d34b…`, 442 files) and seed 7 default *including the five corpus files*
-  (`51e44c72…`, 449 files). Record: `cross_version_digests_f17.json`.
+  (`51e44c72…`, 449 files). Record: `cross_version_digests_f19.json`.
 - **Two fresh containers.** Instance (445 files) and corpus (5 files) byte-identical across
   two new `postgres:17` containers; on each, oracle, database, verifier-twin and recorded
   authorization digests equal, 0 disagreements, 0 twin disagreements, 0 service-visibility
   and 0 hardening problems, database reload identical, 29 instance gold SQL facts with 0
   mismatches; instance A verified on container B; the case gold SQL check (427 facts, 103
   probes) passed on both; a rebuild of corpus A found no difference. Record:
-  `fresh_container_closure_f17.json`.
-- **Tests.** 405 passed, 0 failed, 0 skipped on each of Python 3.11.17, 3.12.13, 3.13.16
+  `fresh_container_closure_f19.json`.
+- **Tests.** 458 passed, 0 failed, 0 skipped on each of Python 3.11.17, 3.12.13, 3.13.16
   and 3.14.8 (Postgres and Docker tests required). ruff clean; mypy strict on `src` clean.
 - **Original frozen spec.** `docs/spec.md` sha256 `85204993…cee1c0`, unchanged.
 
@@ -95,6 +100,8 @@ restored from saved bytes afterwards and the suite re-run green. Definitions and
 - **Injection-carrier rule (F-17).** 10 of 10 mutants caught (gate, allocation, builder);
   the first run caught 9, the survivor (one cursor for both splits) got a test
   (`carrier_mut.log`, `B3_rerun.txt`).
+- **Gold-contract rules (F-18, F-19).** 7 of 7 mutants caught, including one that
+  reintroduces the direct-inputs rule (`contract_mut.log`).
 - **Freeze gates.** 26 of 26 mutants caught. The first run caught 24; the two survivors
   (a third member in a counterfactual group; the X share cap moved off its boundary) each
   got a test, including exact-boundary tests for both X caps and the probe share.

@@ -174,6 +174,11 @@ def adjusted_otd(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
                       f"{between('l.promised_date', q)}", DELIV_USES, "percent", "0.01")
 
 
+def currency_of(v: PrincipalView, sid: str) -> str:
+    """A supplier's trading currency: every order and invoice of a supplier is in it."""
+    return str(v.data.by("suppliers", "supplier_id")[sid]["currency"])
+
+
 def credit_base(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
     lines = _promised_lines(v, sid, q)
     if not lines:
@@ -183,7 +188,8 @@ def credit_base(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
                       f"SELECT round(sum(l.qty * l.unit_price), 2) {DELIV_FROM}WHERE "
                       f"p.supplier_id = {F.lit(sid)} AND {between('l.promised_date', q)}",
                       {"po_lines": ["po_id", "promised_date", "qty", "unit_price"],
-                       "purchase_orders": ["po_id", "supplier_id"]}, None, "0.01")
+                       "purchase_orders": ["po_id", "supplier_id"]}, currency_of(v, sid),
+                      "0.01")
 
 
 def rejection_pct(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
@@ -216,7 +222,8 @@ def invoiced_amount(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
                       "eeb.invoices i ON i.invoice_id = il.invoice_id WHERE i.supplier_id = "
                       f"{F.lit(sid)} AND {between('i.invoice_date', q)}",
                       {"invoices": ["invoice_id", "supplier_id", "invoice_date"],
-                       "invoice_lines": ["invoice_id", "amount"]}, None, "0.01")
+                       "invoice_lines": ["invoice_id", "amount"]}, currency_of(v, sid),
+                      "0.01")
 
 
 def unit_cost(v: PrincipalView, sid: str, item: str, q: str, fid: str = "unit_cost"
@@ -235,7 +242,8 @@ def unit_cost(v: PrincipalView, sid: str, item: str, q: str, fid: str = "unit_co
                       f"{F.lit(sid)} AND l.item_id = {F.lit(item)} AND "
                       f"{between('p.order_date', q)}",
                       {"po_lines": ["po_id", "item_id", "qty", "unit_price"],
-                       "purchase_orders": ["po_id", "supplier_id", "order_date"]}, None, "0.0001")
+                       "purchase_orders": ["po_id", "supplier_id", "order_date"]},
+                      currency_of(v, sid), "0.0001")
 
 
 # ---------------------------------------------------------------------------- templates
@@ -259,16 +267,35 @@ class Template:
         raise NotImplementedError
 
 
+def evidence_kinds(facts: list[dict[str, Any]], fid: str) -> list[str]:
+    """The evidence kinds a fact rests on: the sources of every fact in its closure
+    (derived inputs and declared parameters, transitively). Spec §6.3: an entitlement
+    figure requires citing the clause and the cells it is computed from."""
+    by_id = {f["fact_id"]: f for f in facts}
+    kinds: set[str] = set()
+    stack, seen = [fid], set()
+    while stack:
+        f = by_id[stack.pop()]
+        if f["fact_id"] in seen:
+            continue
+        seen.add(f["fact_id"])
+        if f["source"] == "derived":
+            stack.extend(f["derived"]["inputs"])
+        else:
+            kinds.add(f["source"])
+        stack.extend(f.get("depends_on", []))
+    return sorted(kinds)
+
+
 def _answer(facts: list[dict[str, Any]], answer: list[str],
             cite: dict[str, list[str]] | None = None, **extra: Any) -> Gold:
-    by_id = {f["fact_id"]: f for f in facts}
-    citations = cite or {}
-    for fid in answer:
-        if fid not in citations:
-            src = by_id[fid]["source"]
-            citations[fid] = ([src] if src != "derived" else
-                              sorted({by_id[i]["source"] for i in by_id[fid]["derived"]["inputs"]
-                                      if by_id[i]["source"] != "derived"}))
+    """An ANSWER gold. Required citation kinds are derived from each fact's evidence; a
+    template that also states them must agree, or the template is wrong."""
+    citations = {fid: evidence_kinds(facts, fid) for fid in answer}
+    for fid, kinds in (cite or {}).items():
+        if sorted(kinds) != citations.get(fid):
+            raise F.GoldContractError(f"{fid}: declared citation kinds {kinds} differ from its "
+                             f"evidence {citations.get(fid)}")
     return {"expected_outcome": "ANSWER", "facts": facts, "answer_requirement": answer,
             "required_citations": [{"fact_id": k, "kinds": v}
                                    for k, v in sorted(citations.items())],
@@ -384,7 +411,8 @@ class SLateValue(SupplierQuarter):
                        "l.promised_date",
                        {"po_lines": ["po_id", "line_no", "promised_date", "qty", "unit_price"],
                         "purchase_orders": ["po_id", "supplier_id"],
-                        "goods_receipts": ["po_id", "line_no", "received_date"]}, None, "0.01")
+                        "goods_receipts": ["po_id", "line_no", "received_date"]},
+                       currency_of(v, s["supplier_id"]), "0.01")
         return _answer([f], ["late_line_value"])
 
 
@@ -415,7 +443,8 @@ class SUnpaidAmount(SupplierQuarter):
                        "AND y.payment_id IS NULL",
                        {"invoices": ["invoice_id", "supplier_id", "invoice_date"],
                         "invoice_lines": ["invoice_id", "amount"],
-                        "payments": ["payment_id", "invoice_id"]}, None, "0.01")
+                        "payments": ["payment_id", "invoice_id"]},
+                       currency_of(v, s["supplier_id"]), "0.01")
         return _answer([f], ["unpaid_amount"])
 
 
@@ -574,7 +603,7 @@ class XCredit(XBase):
                            ["shortfall_points", "credit_pct_per_point", "credit_cap_pct"],
                            "percent")
         amt = F.derived_fact("credit_amount", "money", F.rnd(base["value"] * pct / 100, 2),
-                             "pct_of", ["credit_pct", "credit_base"], None, "0.01")
+                             "pct_of", ["credit_pct", "credit_base"], base["unit"], "0.01")
         return _answer([t, rate, cap, adj, base, p, c, amt], ["credit_amount", "credit_pct"])
 
 
@@ -871,7 +900,8 @@ class XRebate(Template):
                          "number", "percent")
         inv = invoiced_amount(v, s["supplier_id"], s["quarter"])
         amt = F.derived_fact("rebate_amount", "money", F.rnd(inv["value"] * pct["value"] / 100, 2),
-                             "pct_of", ["rebate_pct", "invoiced_amount"], None, "0.01")
+                             "pct_of", ["rebate_pct", "invoiced_amount"], inv["unit"],
+                             "0.01")
         return _answer([pct, inv, amt], ["rebate_amount"])
 
 

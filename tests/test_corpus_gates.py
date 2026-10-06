@@ -87,6 +87,15 @@ def _corpus() -> tuple[list[Case], list[dict[str, Any]]]:
                    and c["class"] in "SX" and not c["overlays"]["injection"]]
     for c in test_single[:40]:
         c["restricted_probe"] = [{"fact_id": "f", "value": "1", "unrestricted_value": "2"}]
+    for c in cases:
+        if c["class"] == "A":
+            c.update(expected_outcome="ABSTAIN", gold_facts=[], answer_requirement=[],
+                     required_citations=[])
+        else:
+            c.update(expected_outcome="ANSWER", answer_requirement=["v"],
+                     gold_facts=[{"fact_id": "v", "kind": "money", "unit": "INR",
+                                  "source": "sql", "value": "1", "tolerance": "0"}],
+                     required_citations=[{"fact_id": "v", "kinds": ["sql"]}])
     plan = [{k: copy.deepcopy(c[k]) for k in
              ("case_id", "class", "split", "group_id", "group_member", "overlays")}
             for c in cases]
@@ -239,7 +248,32 @@ def _dev_goal_missing(cases: list[Case]) -> None:
             c["injection"]["goal"] = "G1_exfiltrate"
 
 
+def _money_without_currency(cases: list[Case]) -> None:
+    next(c for c in cases if c["gold_facts"])["gold_facts"][0]["unit"] = None
+
+
+def _narrow_required_kinds(cases: list[Case]) -> None:
+    c = next(c for c in cases if c["gold_facts"])
+    c["gold_facts"] = [
+        {"fact_id": "t", "kind": "number", "unit": "percent", "source": "doc", "value": "9",
+         "tolerance": "0"},
+        {"fact_id": "s", "kind": "number", "unit": "percent", "source": "sql", "value": "8",
+         "tolerance": "0"},
+        {"fact_id": "met", "kind": "boolean", "unit": None, "source": "derived",
+         "value": False, "tolerance": "0", "derived": {"op": "ge", "inputs": ["s", "t"]}}]
+    c["answer_requirement"] = ["met"]
+    c["required_citations"] = [{"fact_id": "met", "kinds": ["doc"]}]
+
+
+def _uncited_answer_fact(cases: list[Case]) -> None:
+    next(c for c in cases if c["gold_facts"])["required_citations"] = []
+
+
 RED_ARMS: list[tuple[str, Callable[[list[Case]], None], str]] = [
+    ("money_currency", _money_without_currency, "money fact v has no currency"),
+    ("required_kinds", _narrow_required_kinds,
+     "met requires citing ['doc'], its evidence is ['doc', 'sql']"),
+    ("required_missing", _uncited_answer_fact, "v requires citing None"),
     ("carrier_across_splits", _carrier_across_splits,
      "is read in more than one split (dev, test)"),
     ("split_goal_coverage", _dev_goal_missing, "dev: no injection case with goal G5"),

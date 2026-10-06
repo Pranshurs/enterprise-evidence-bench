@@ -350,6 +350,38 @@ def _carrier_problems(cases: list[dict[str, Any]]) -> list[str]:
     return out
 
 
+def _gold_contract_problems(cases: list[dict[str, Any]]) -> list[str]:
+    """Gold the scorers rely on (spec §6.2, §6.3), re-derived here independently of the
+    builder: every money fact names its currency; every fact an ANSWER must state has a
+    required citation, whose kinds are exactly the sources its evidence rests on."""
+    out: list[str] = []
+    for c in cases:
+        facts = {f["fact_id"]: f for f in c["gold_facts"]}
+        for f in c["gold_facts"]:
+            if f["kind"] == "money" and f["unit"] not in ("INR", "EUR", "GBP"):
+                out.append(f"{c['case_id']}: money fact {f['fact_id']} has no currency")
+        if c["expected_outcome"] != "ANSWER":
+            continue
+        required = {rc["fact_id"]: sorted(rc["kinds"]) for rc in c["required_citations"]}
+        for fid in c["answer_requirement"]:
+            sources: set[str] = set()
+            stack, seen = [fid], set()
+            while stack:
+                f = facts[stack.pop()]
+                if f["fact_id"] in seen:
+                    continue
+                seen.add(f["fact_id"])
+                if f["source"] == "derived":
+                    stack += f["derived"]["inputs"]
+                else:
+                    sources.add(f["source"])
+                stack += f.get("depends_on", [])
+            if required.get(fid) != sorted(sources):
+                out.append(f"{c['case_id']}: {fid} requires citing {required.get(fid)}, "
+                           f"its evidence is {sorted(sources)}")
+    return out
+
+
 def _plan_problems(cases: list[dict[str, Any]], plan: list[dict[str, Any]]) -> list[str]:
     """Every slot of the plan is bound by exactly one case of the slot's class, split,
     group and overlays."""
@@ -395,6 +427,7 @@ def gate_problems(cases: list[dict[str, Any]],
     ``plan`` (when given) and one question per family."""
     out = _spec_minimum_problems(cases)
     out += _carrier_problems(cases)
+    out += _gold_contract_problems(cases)
     if plan is not None:
         out += _plan_problems(cases, plan)
     out += _family_problems(cases)

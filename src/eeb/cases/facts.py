@@ -22,6 +22,21 @@ class FactError(ValueError):
     pass
 
 
+CURRENCIES = ("INR", "EUR", "GBP")
+
+
+class GoldContractError(Exception):
+    """A template built a gold fact that breaks the case contract. Not a ValueError: the
+    builder counts ValueErrors as rejected candidates, and this must stop the build."""
+
+
+def _money_has_currency(fid: str, kind: str, unit: str | None) -> None:
+    """A money fact without its currency cannot be checked for currency consistency
+    (spec §6.2, §10.2), so it is refused when it is built."""
+    if kind == "money" and unit not in CURRENCIES:
+        raise GoldContractError(f"{fid}: a money fact needs its currency, not {unit!r}")
+
+
 def rnd(x: Decimal, places: int) -> Decimal:
     return x.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
 
@@ -41,6 +56,7 @@ def doc_fact(data: InstanceData, fid: str, doc_id: str, version: int, pattern: s
         raise FactError(f"{fid}: span not inside exactly one chunk")
     raw = m.group(1)
     value = cast(raw.replace(",", "")) if cast is Decimal else cast(raw)
+    _money_has_currency(fid, kind, unit)
     return {"fact_id": fid, "source": "doc", "kind": kind, "value": value, "unit": unit,
             "tolerance": "0",
             "doc_ref": {"doc_id": doc_id, "version": version, "start": m.start(),
@@ -53,6 +69,7 @@ def sql_fact(fid: str, kind: str, value: Any, gold_sql: str, uses: dict[str, lis
     """``depends_on`` names the facts whose values the query takes as parameters (for
     example a threshold read from a document). Such a fact cannot be computed without
     them, so the necessity check treats them as its inputs."""
+    _money_has_currency(fid, kind, unit)
     f = {"fact_id": fid, "source": "sql", "kind": kind, "value": value, "unit": unit,
          "tolerance": tolerance, "gold_sql": gold_sql, "uses": uses}
     if depends_on:
@@ -62,6 +79,7 @@ def sql_fact(fid: str, kind: str, value: Any, gold_sql: str, uses: dict[str, lis
 
 def derived_fact(fid: str, kind: str, value: Any, op: str, inputs: list[str],
                  unit: str | None = None, tolerance: str = "0") -> dict[str, Any]:
+    _money_has_currency(fid, kind, unit)
     return {"fact_id": fid, "source": "derived", "kind": kind, "value": value, "unit": unit,
             "tolerance": tolerance, "derived": {"op": op, "inputs": inputs}}
 

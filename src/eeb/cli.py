@@ -165,17 +165,17 @@ def cmd_cases_rephrase(args: argparse.Namespace) -> int:
         sys.exit("ANTHROPIC_API_KEY is not set")
     path = Path(args.cases) / "rephrase_queue.jsonl"
     entries = read_jsonl(path)
-    counts = paraphrase_queue(entries, AnthropicUpstream(api_key=key), "anthropic.messages",
-                              args.model, "anthropic", args.reference_family, args.only,
-                              args.limit)
+    run = paraphrase_queue(entries, AnthropicUpstream(api_key=key), "anthropic.messages",
+                           args.model, "anthropic", args.reference_family, args.only,
+                           args.limit)
     path.write_bytes(dumps_queue(entries))
     import datetime as dt
     rec = provenance_record(args.model, "anthropic", "anthropic.messages", args.only,
-                            args.limit, counts, _git_head(),
+                            args.limit, run, _git_head(),
                             dt.datetime.now(dt.UTC).isoformat(timespec="seconds"))
     with (Path(args.cases) / "rephrase_provenance.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, sort_keys=True) + "\n")
-    print(json.dumps(counts, indent=2))
+    print(json.dumps(run.counts, indent=2))
     return 0
 
 

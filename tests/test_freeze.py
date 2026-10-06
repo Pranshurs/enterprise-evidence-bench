@@ -17,7 +17,7 @@ import pytest
 
 from eeb import canonical
 from eeb.cases import corpus, freeze
-from eeb.cases.paraphrase import paraphrase_queue
+from eeb.cases.paraphrase import paraphrase_queue, provenance_record
 from eeb.db.load import read_jsonl
 from eeb.harness.upstreams import ScriptedUpstream
 from tests.test_case_build import PROBE_SHARE_ON_SMALL, SLOTS_ON_SMALL
@@ -49,12 +49,15 @@ def _complete_human_steps(d: Path) -> None:
         r["review"] = {"reviewed": True, "issue": None, "resolution": None}
     (d / "review_set.jsonl").write_bytes(canonical.jsonl(review))
     queue = read_jsonl(d / "rephrase_queue.jsonl")
-    counts = paraphrase_queue(
+    run = paraphrase_queue(
         queue, ScriptedUpstream(script=lambda api, body: "Could you tell me: " + body[
             "messages"][0]["content"].split("Question: ", 1)[1].split("\n")[0]),
         "anthropic.messages", "model-x", "anthropic", "openai")
-    assert counts["failed"] == 0
+    assert run.counts["failed"] == 0
     (d / "rephrase_queue.jsonl").write_bytes(canonical.jsonl(queue))
+    rec = provenance_record("model-x", "anthropic", "anthropic.messages", "pending", 0, run,
+                            "abc", "2026-10-06T00:00:00+00:00")
+    (d / "rephrase_provenance.jsonl").write_text(json.dumps(rec) + "\n")
 
 
 @pytest.fixture()
@@ -160,12 +163,78 @@ def test_paraphrase_pilot_limit_and_provenance() -> None:
     for e in q:
         from eeb.cases import rephrase
         e["must_preserve"] = rephrase.must_preserve(str(e["question_canonical"]))
-    counts = paraphrase_queue(q, ScriptedUpstream(script=lambda a, b: "Tell me " + b[
+    run = paraphrase_queue(q, ScriptedUpstream(script=lambda a, b: "Tell me " + b[
         "messages"][0]["content"].split("Question: ", 1)[1].split("\n")[0]),
         "anthropic.messages", "m", "anthropic", "openai", limit=3)
-    assert counts["asked"] == 3 and sum(1 for e in q if e["rephrased_question"]) == 3
-    rec = provenance_record("m", "anthropic", "anthropic.messages", "pending", 3, counts,
+    assert run.counts["asked"] == 3 and sum(1 for e in q if e["rephrased_question"]) == 3
+    assert len(run.produced) == 3
+    rec = provenance_record("m", "anthropic", "anthropic.messages", "pending", 3, run,
                             "abc", "2026-10-06T00:00:00+00:00")
     assert rec["parameters"] == {"temperature": 0, "max_tokens": 300}
     blob = json.dumps(rec).lower()
     assert "key" not in blob and "authorization" not in blob and "header" not in blob
+
+
+
+# ------------------------------------------------------------ provenance binds the paraphrases
+def _set_provenance(d: Path, text: str | None) -> None:
+    p = d / "rephrase_provenance.jsonl"
+    if text is None:
+        p.unlink()
+    else:
+        p.write_text(text)
+
+
+def _first_run(d: Path) -> dict[str, Any]:
+    return json.loads((d / "rephrase_provenance.jsonl").read_text().splitlines()[0])
+
+
+@pytest.mark.parametrize(("edit", "expected"), [
+    ("missing", "rephrase provenance is missing"),
+    ("empty", "rephrase provenance is empty"),
+    ("unparseable", "is malformed"),
+    ("no-produced", "is malformed"),
+    ("bad-entry", "has a malformed entry"),
+    ("other-model", "names a model it did not run"),
+    ("text-edited", "is not bound by the provenance"),
+    ("entry-dropped", "is not bound by the provenance"),
+], ids=lambda x: x if " " not in x else "")
+def test_red_arm_freeze_refused_without_binding_provenance(
+        ready: Path, instance_dir: Path, edit: str, expected: str) -> None:
+    run = _first_run(ready)
+    if edit == "missing":
+        _set_provenance(ready, None)
+    elif edit == "empty":
+        _set_provenance(ready, "")
+    elif edit == "unparseable":
+        _set_provenance(ready, "{not json\n")
+    elif edit == "no-produced":
+        del run["produced"]
+        _set_provenance(ready, json.dumps(run) + "\n")
+    elif edit == "bad-entry":
+        run["produced"][0] = {"family_id": 1}
+        _set_provenance(ready, json.dumps(run) + "\n")
+    elif edit == "other-model":
+        run["model"] = "another-model"
+        _set_provenance(ready, json.dumps(run) + "\n")
+    elif edit == "text-edited":
+        queue = read_jsonl(ready / "rephrase_queue.jsonl")
+        queue[0]["rephrased_question"] += " Please."
+        (ready / "rephrase_queue.jsonl").write_bytes(canonical.jsonl(queue))
+    elif edit == "entry-dropped":
+        run["produced"] = run["produced"][1:]
+        _set_provenance(ready, json.dumps(run) + "\n")
+    with pytest.raises(freeze.FreezeError, match=expected):
+        freeze.freeze(ready, instance_dir, ROOT / "docs/spec.md", "openai", "abc", True)
+    assert not (ready / "FREEZE.json").exists()
+
+
+def test_green_arm_bound_provenance_is_accepted_and_frozen(ready: Path,
+                                                           instance_dir: Path) -> None:
+    from eeb.cases.paraphrase import provenance_problems
+    runs = [json.loads(x) for x in (ready / "rephrase_provenance.jsonl").read_text()
+            .splitlines()]
+    assert provenance_problems(read_jsonl(ready / "rephrase_queue.jsonl"), runs) == []
+    rec = freeze.freeze(ready, instance_dir, ROOT / "docs/spec.md", "openai", "abc", True)
+    assert "rephrase_provenance.jsonl" in rec["files_sha256"]
+    assert rec["rephrase"]["runs"] == runs

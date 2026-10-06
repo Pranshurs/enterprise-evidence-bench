@@ -27,6 +27,7 @@ from typing import Any
 
 from eeb import canonical
 from eeb.cases import corpus
+from eeb.cases.paraphrase import provenance_problems
 from eeb.db.load import read_jsonl
 from eeb.metrics import layer
 
@@ -74,13 +75,22 @@ def freeze(cases_dir: Path, instance: Path, spec: Path, reference_family: str,
     status = corpus.human_status(cases_dir, reference_family)
     if not status["freeze_eligible"]:
         raise FreezeError("not eligible: " + "; ".join(status["freeze_blockers"]))
+    prov = cases_dir / "rephrase_provenance.jsonl"
+    runs: list[Any] | None = None
+    if prov.exists():
+        try:
+            runs = [json.loads(x) for x in prov.read_text("utf-8").splitlines() if x.strip()]
+        except ValueError:
+            runs = ["unparseable"]
+    bad = provenance_problems(read_jsonl(cases_dir / "rephrase_queue.jsonl"), runs)
+    if bad:
+        raise FreezeError("provenance: " + "; ".join(bad[:10]))
     manifest = json.loads((cases_dir / "MANIFEST.json").read_text("utf-8"))
     cases = read_jsonl(cases_dir / "cases.jsonl")
     queue = read_jsonl(cases_dir / "rephrase_queue.jsonl")
     review = read_jsonl(cases_dir / "review_set.jsonl")
     final = apply_human_steps(cases, queue, review)
     (cases_dir / "cases.final.jsonl").write_bytes(canonical.jsonl(final))
-    prov = cases_dir / "rephrase_provenance.jsonl"
     test = [c for c in final if c["split"] == "test"]
     record = {
         "status": FROZEN, "commit": commit,

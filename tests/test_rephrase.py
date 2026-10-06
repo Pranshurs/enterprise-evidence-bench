@@ -138,7 +138,7 @@ def test_paraphrase_sends_only_the_question_and_its_anchors() -> None:
             GOOD[Q_OTD].replace("2024Q4", "2025Q1")      # one faithful, one changed period
     q = _queue()
     counts = paraphrase_queue(q, ScriptedUpstream(script=reply), "anthropic.messages",
-                              "model-x", "anthropic", "openai")
+                              "model-x", "anthropic", "openai").counts
     assert counts == {"asked": 2, "consistent": 1, "rejected": 1, "failed": 0}
     assert q[0]["rephrased_by_model_family"] == "anthropic:model-x"
     assert q[0]["meaning_preserved_check"] == {"mechanical": [], "human": None}
@@ -147,7 +147,7 @@ def test_paraphrase_sends_only_the_question_and_its_anchors() -> None:
     # Only rejected entries are asked again; pending ones are done.
     again = paraphrase_queue(q, ScriptedUpstream(script=lambda a, b: GOOD[Q_OTD]),
                              "anthropic.messages", "model-x", "anthropic", "openai",
-                             only="rejected")
+                             only="rejected").counts
     assert again == {"asked": 1, "consistent": 1, "rejected": 0, "failed": 0}
     assert rephrase.check_queue(q, "openai")["passed"] is True
 

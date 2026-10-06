@@ -1,0 +1,8 @@
+BASELINE 0 17 passed in 5.12s
+KILLED P1 freeze ignores provenance ['test_red_arm_freeze_refused_without_binding_provenance[missing-]', 'test_red_arm_freeze_refused_without_binding_provenance[empty-]'] | 8 failed, 9 passed in 5.98s
+KILLED P2 missing provenance accepted ['test_red_arm_freeze_refused_without_binding_provenance[missing-]'] | 1 failed, 16 passed in 5.21s
+KILLED P3 text not bound ['test_red_arm_freeze_refused_without_binding_provenance[text-edited-]'] | 1 failed, 16 passed in 5.20s
+KILLED P4 model not checked ['test_red_arm_freeze_refused_without_binding_provenance[other-model-]'] | 1 failed, 16 passed in 5.18s
+KILLED P5 malformed run accepted ['test_red_arm_freeze_refused_without_binding_provenance[unparseable-]', 'test_red_arm_freeze_refused_without_binding_provenance[no-produced-]'] | 2 failed, 15 passed in 5.10s
+{'KILLED': 5}
+RESTORED 0 17 passed in 5.07s

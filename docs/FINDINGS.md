@@ -54,3 +54,85 @@ caught.**
   are always probes.
 - *Result.* 0 non-distinctive gated amounts across 4 seeds × 2 scales. The golden digest
   and cross-version evidence were regenerated in `docs/evidence/adr0003/`.
+
+## Case and gold milestone
+
+**F-5: the raw on-time metric divided by a count that can be zero.**
+- *Defect.* `raw_on_time_delivery_pct` divided by `count(*)`. A filtered query with no
+  grouping that matches no row divides by zero instead of returning NULL.
+- *Fix.* The divisor is `nullif(count(*), 0)`, as `rejection_rate_pct` and
+  `effective_unit_cost` already had. The Python reference returns `None` for an empty set.
+- *Consequence.* The governed catalog is checksum-frozen, so this is a deliberate catalog
+  change: `e4a993d6…` became `1a8badb6…`. No baseline had run on the old catalog.
+
+**F-6: a new contract attribute shifted every later random draw.**
+- *Defect.* The SLA quality threshold was drawn from the shared `contracts` stream, between
+  two existing draws. Every contract's item list changed, and with it the order volume:
+  the seed-11 default fixture fell from 103,441 to 97,976 purchase-order lines, below the
+  100,000 floor. Seed 7 rose to 109,051, so the seed-7 checks did not show it.
+- *Found by.* `test_default_scale_is_deterministic_and_large_enough`, which uses seed 11.
+- *Fix.* The threshold has its own stream (`contracts/quality_threshold`). Line counts are
+  back to 103,832 (seed 7) and 103,441 (seed 11), the values before the attribute existed.
+- *Lesson.* A new attribute gets a new named stream. Inserting a draw into an existing
+  stream changes the fixture far from the change.
+
+**F-7: the out-of-layer search rescanned the whole view for every case.**
+- *Observation.* `MetricSearch.reconstructible` filtered and regrouped about 100,000 rows
+  for every metric, filter subset and grouping, for every candidate case: about 10 s per
+  case at default scale (28 cases in 150 s under the profiler), with 94% of the time there.
+- *Fix.* Rows are indexed per filter dimension and the numeric results of one (principal,
+  metric, filter subset, grouping) query are computed once. The set of queries tried is
+  unchanged. A full default-scale build takes about 100 s.
+- *Why this is the same validator.* `tests/test_case_validators.py` keeps the plain search,
+  which scans the view for every query, and compares the two query by query (the multiset
+  of values) and verdict by verdict for every principal. Nine single mutants of the
+  optimized search (dropped cache-key parts, ignored filters, lost empty-set case, strict
+  tolerance, capped grouping) are each caught.
+
+**F-8: out-of-layer questions answered by a small count rarely survive the validator.**
+- *Observation.* With the build fast enough to finish, 13 of the 30 out-of-layer S slots
+  could not be filled. Both out-of-layer S templates answered with a count (1, 2, 3 …), and
+  some governed metric query, typically `po_count` under some grouping, returns the same
+  small integer. `S.unpaid_invoices` was rejected for all 600 bindings.
+- *Decision.* The validator is unchanged: it cannot tell coincidence from reconstruction,
+  and a case it cannot clear is not an out-of-layer case. Three templates with distinctive
+  answers were added instead (`S.adjusted_otd`, `S.late_line_value`, `S.unpaid_amount`).
+- *Open.* `S.unpaid_invoices` contributes no case and `X.off_contract_compliance` none
+  either (all 30 bindings fail cross-source necessity, because every non-compliant order
+  id is also named in an exception memo). Both are kept, unused, pending a design decision.
+
+**F-9: quotas were being met by asking one question as several principals.**
+- *Observation.* The 45 conflict cases covered 22 distinct conflicts; the corpus had 665
+  cases in 552 families.
+- *Fix.* A family (template plus slots) is used once. The two members of a counterfactual
+  group are the only cases that share one. The corpus now has 600 families for 665 cases
+  (535 single cases and 65 pairs).
+- *Consequence for the generator.* The default fixture did not hold 45 distinct conflicts
+  (3 thresholds, about 22 usable payment-term conflicts, 3 force-majeure conflicts). The
+  default scale now records more ordinary incidents (`incident_draws_per_month = 12`),
+  which gives 28 force-majeure conflicts at seed 7 and 36 at seed 11. The small scale keeps
+  one draw per month and its bytes did not change.
+
+**F-10: the documents-only check did not search the documents a case cites.**
+- *Defect.* To decide whether documents alone answer a question, the validator searched
+  documents that name the supplier or contract in the question's slots. An SLA names its
+  contract, not the supplier, so for a supplier-and-quarter question the cited SLA itself
+  was not searched. A database value printed there would have passed as database-only.
+- *Found by.* Writing the red arm for the rule: the constructed violation was accepted.
+- *Fix.* The reader's documents are those naming the supplier, the contract or any of the
+  supplier's contracts, plus every version of each document the gold cites. The search
+  only grew. All 285 X cases still prove both sources necessary; the stricter check rejects
+  644 expedite candidates instead of 446.
+
+**F-11: three rules had no test that could fail.**
+- *Observation.* Of 18 single mutants of the validators, the builder and the Postgres gold
+  check, 15 were caught by the first version of the red-arm tests. The survivors: the
+  cited-document search (masked by the contract search for supplier questions), the rule
+  that a permitted group member sees the complete answer, and family reuse by groups.
+- *Fix.* One targeted test per survivor, and one more mutant for the contract search. All
+  19 single mutants are now caught, on a passing baseline.
+
+**Open observation: restricted-value probes are rare.** One case of 665 (seed 7 default)
+records an answer that differs from the all-rows answer for its principal. The mechanism is
+tested, but the corpus barely exercises it. Whether to bind more partially-visible
+principals on purpose is a design decision.

@@ -6,7 +6,10 @@ the bytes the interpreters actually emit, which is stronger than a test suite be
 each version.
 
     python scripts/cross_version_digests.py --python /path/py311 /path/py312 ... \
-        --case 7:small --case 1234:small --case 7:default --out report.json
+        --case 7:small --case 1234:small --case 7:default:cases --out report.json
+
+A case ending in ``:cases`` also builds the case corpus (cases, review set, rephrase queue,
+build report, manifest) and compares those bytes too.
 
 Exit status 0 only if every interpreter emits identical digests for every case.
 """
@@ -20,13 +23,20 @@ import sys
 from typing import Any
 
 PROBE = """
-import json, sys
+import json, sys, tempfile
+from pathlib import Path
 from eeb.generator.core import Config
-from eeb.generator.instance import build_instance_files
+from eeb.generator.instance import build_instance_files, write_files
 from eeb import canonical
-seed, scale = int(sys.argv[1]), sys.argv[2]
+seed, scale, with_cases = int(sys.argv[1]), sys.argv[2], sys.argv[3] == "cases"
 files = build_instance_files(Config(seed=seed, scale=scale))
 meta = json.loads(files["INSTANCE.json"])
+if with_cases:
+    from eeb.cases import corpus
+    with tempfile.TemporaryDirectory() as tmp:
+        write_files(files, Path(tmp) / "instance")
+        for name, blob in corpus.assemble(Path(tmp) / "instance").items():
+            files["corpus/" + name] = blob
 print(json.dumps({
     "python": sys.version.split()[0],
     "instance_digest": meta["instance_digest"],
@@ -46,17 +56,18 @@ def differing_files(runs: list[dict[str, Any]]) -> dict[str, list[str]]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--python", nargs="+", required=True)
-    ap.add_argument("--case", action="append", required=True, help="seed:scale")
+    ap.add_argument("--case", action="append", required=True,
+                    help="seed:scale, or seed:scale:cases to also build the case corpus")
     ap.add_argument("--out")
     args = ap.parse_args()
     report: dict[str, object] = {"cases": {}}
     ok = True
     for case in args.case:
-        seed, scale = case.split(":")
+        seed, scale, *extra = case.split(":")
         runs = []
         for py in args.python:
-            out = subprocess.run([py, "-c", PROBE, seed, scale], capture_output=True, text=True,
-                                 check=True)
+            out = subprocess.run([py, "-c", PROBE, seed, scale, "".join(extra)],
+                                 capture_output=True, text=True, check=True)
             runs.append(json.loads(out.stdout))
         diffs = differing_files(runs)
         identical = all(not d for d in diffs.values())

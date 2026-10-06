@@ -1,0 +1,77 @@
+{
+  "all_identical": true,
+  "cases": {
+    "11:default": {
+      "differing_files": {
+        "3.12.13": [],
+        "3.13.16": [],
+        "3.14.8": []
+      },
+      "file_count": 442,
+      "identical": true,
+      "instance_digest": [
+        "f720c5f9c3ad43c3e5d6d5d39342d5116b3f23f8e4ce74b8d3d6463a5fc2f9f3"
+      ],
+      "interpreters": [
+        "3.11.17",
+        "3.12.13",
+        "3.13.16",
+        "3.14.8"
+      ]
+    },
+    "1234:small": {
+      "differing_files": {
+        "3.12.13": [],
+        "3.13.16": [],
+        "3.14.8": []
+      },
+      "file_count": 141,
+      "identical": true,
+      "instance_digest": [
+        "97af9d47f02341379743330399fd4c17ae9921c1eefa8db34aee80eaab0fd20a"
+      ],
+      "interpreters": [
+        "3.11.17",
+        "3.12.13",
+        "3.13.16",
+        "3.14.8"
+      ]
+    },
+    "7:default:cases": {
+      "differing_files": {
+        "3.12.13": [],
+        "3.13.16": [],
+        "3.14.8": []
+      },
+      "file_count": 449,
+      "identical": true,
+      "instance_digest": [
+        "58c86fb8c6d3ba5bf633d515806d242865e07de93e82cf840ec468fcd4f725a5"
+      ],
+      "interpreters": [
+        "3.11.17",
+        "3.12.13",
+        "3.13.16",
+        "3.14.8"
+      ]
+    },
+    "7:small": {
+      "differing_files": {
+        "3.12.13": [],
+        "3.13.16": [],
+        "3.14.8": []
+      },
+      "file_count": 146,
+      "identical": true,
+      "instance_digest": [
+        "43383ed8064a015d87d48f095488ae4c76fa88fa879263db0d318f726ba4f0b8"
+      ],
+      "interpreters": [
+        "3.11.17",
+        "3.12.13",
+        "3.13.16",
+        "3.14.8"
+      ]
+    }
+  }
+}

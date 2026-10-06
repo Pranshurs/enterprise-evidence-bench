@@ -13,7 +13,9 @@ The validation report covers:
 - hardening and logging configuration;
 - gold SQL answers.
 
-It also cross-verifies instance A on container B. The record contains hashes and counts
+It also cross-verifies instance A on container B. With ``--cases`` it builds the case
+corpus on each container as well, which re-executes every SQL gold fact under the asking
+principal's login, and compares those bytes too. The record contains hashes and counts
 only; no raw database logs.
 
     python scripts/fresh_container_closure.py --seed 7 --scale default --out record.json
@@ -66,6 +68,9 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--scale", default="default")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--cases", action="store_true",
+                    help="also build the case corpus on each container (every SQL gold is "
+                         "re-executed under its principal's login) and compare the bytes")
     args = ap.parse_args()
     eeb = str(Path(sys.executable).with_name("eeb"))
     env = {**os.environ, "EEB_PG_ADMIN_DSN": DSN}
@@ -77,6 +82,10 @@ def main() -> int:
             subprocess.run([eeb, "build", "--seed", str(args.seed), "--scale", args.scale,
                             "--out", str(work / label)], env=env, check=True,
                            capture_output=True)
+            if args.cases:
+                subprocess.run([eeb, "cases", "build", "--instance", str(work / label),
+                                "--out", str(work / f"{label}-cases")], env=env, check=True,
+                               capture_output=True)
             if label == "A":
                 continue
             verify = subprocess.run([eeb, "verify", "--instance", str(work / "A")], env=env,
@@ -103,10 +112,27 @@ def main() -> int:
         "files_compared": len(a), "byte_identical_A_vs_B": a == b,
         "validation_A": pick(va), "verify_A_on_B": pick(vv),
     }
+    ok = bool(record["byte_identical_A_vs_B"] and va["passed"] and vv["passed"])
+    if args.cases:
+        ca, cb = tree(work / "A-cases"), tree(work / "B-cases")
+        manifest = json.loads((work / "A-cases" / "MANIFEST.json").read_text())
+        rebuilt = subprocess.run([eeb, "cases", "verify", "--cases", str(work / "A-cases"),
+                                  "--instance", str(work / "A")], capture_output=True, text=True)
+        problems = json.loads(rebuilt.stdout)["problems"]
+        record["procedure"] += ("; eeb cases build on each container; eeb cases verify of "  # type: ignore[operator]
+                                "corpus A against a rebuild")
+        record["case_corpus"] = {
+            "files_compared": len(ca), "byte_identical_A_vs_B": ca == cb,
+            "files_sha256": manifest["files_sha256"], "counts": manifest["counts"],
+            "status": manifest["status"], "gold_sql_check": manifest["gold_sql_check"],
+            "rebuild_problems": problems,
+        }
+        ok = ok and ca == cb and not problems and (
+            manifest["gold_sql_check"]["status"] == "passed")
     Path(args.out).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     print(json.dumps(record, indent=2, sort_keys=True))
     shutil.rmtree(work)
-    return 0 if record["byte_identical_A_vs_B"] and va["passed"] and vv["passed"] else 1
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

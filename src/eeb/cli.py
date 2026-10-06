@@ -1,4 +1,4 @@
-"""Command line: ``eeb build``, ``eeb verify`` and ``eeb cases``.
+"""Command line: ``eeb build``, ``eeb verify``, ``eeb cases`` and ``eeb run``.
 
 ``build`` is the only supported way to produce an instance. It generates into a temporary
 sibling directory, builds a fresh database, and runs the policy agreement and hardening
@@ -21,7 +21,7 @@ from eeb.cases import corpus
 from eeb.cases.dbcheck import check_case_gold_sql
 from eeb.db import agreement
 from eeb.db.gold_check import check_gold_sql
-from eeb.db.load import build_database, drop, export_tables, read_instance
+from eeb.db.load import build_database, drop, export_tables, read_instance, read_jsonl
 from eeb.generator.core import SCALES, Config
 from eeb.generator.instance import build_instance_files, write_files
 
@@ -154,6 +154,66 @@ def cmd_cases_verify(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def _git_head() -> str:
+    import subprocess
+    r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+                       check=False, cwd=Path(__file__).resolve().parents[2])
+    return r.stdout.strip() or "unknown"
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Run a baseline through the harness on a selection of cases.
+
+    The scripted upstream proves plumbing only; its report says so and is never a result.
+    The OpenAI upstream reads its key from OPENAI_API_KEY and never writes it anywhere.
+    A run on the test split needs a stated purpose and is appended to TEST_RUNS.log."""
+    import datetime as dt
+
+    from eeb.baselines.agents import make_app
+    from eeb.harness.run import AppServer, RunConfig, run
+    from eeb.harness.upstreams import OpenAICompatibleUpstream, ScriptedUpstream, Upstream
+
+    cases = [c for c in read_jsonl(Path(args.cases)) if c["split"] == args.split
+             and (not args.classes or c["class"] in args.classes.split(","))]
+    if args.limit:
+        cases = cases[:args.limit]
+    if args.split == "test" and not args.purpose:
+        sys.exit("a test-split run needs --purpose (spec §11: test runs are logged)")
+    upstream: Upstream
+    if args.upstream == "scripted":
+        upstream = ScriptedUpstream()
+    else:
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            sys.exit("OPENAI_API_KEY is not set")
+        upstream = OpenAICompatibleUpstream(base_url=args.base_url, api_key=key, name="openai")
+    container = args.pg_container or os.environ.get("EEB_PG_CONTAINER")
+    if not container:
+        sys.exit("the Postgres container is required for the statement log (EEB_PG_CONTAINER)")
+    with AppServer(make_app(args.baseline)) as sut:
+        report = run(RunConfig(instance=Path(args.instance), cases=cases, sut_url=sut.url,
+                               mode="S", admin_dsn=_dsn(args.pg_dsn), pg_container=container,
+                               out_dir=Path(args.out), upstream=upstream,
+                               model_id=args.model_id, sut_name=args.baseline,
+                               model_access_mode="gateway_only"))
+    report["plumbing_only"] = args.upstream == "scripted"
+    (Path(args.out) / "REPORT.json").write_text(json.dumps(report, indent=2, sort_keys=True,
+                                                           default=str) + "\n", "utf-8")
+    if args.split == "test":
+        line = {"timestamp": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+                "commit": _git_head(), "baseline": args.baseline, "model_id": args.model_id,
+                "upstream": args.upstream, "cases": len(cases), "classes": args.classes,
+                "purpose": args.purpose, "out": Path(args.out).name}
+        with Path(args.test_runs_log).open("a", encoding="utf-8") as f:
+            f.write(json.dumps(line, sort_keys=True) + "\n")
+    o = report["scores"]["overall"]
+    print(json.dumps({"cases": report["cases"], "plumbing_only": report["plumbing_only"],
+                      "context_exposure": report["context_exposure"]["verdict"],
+                      "false_answer": o["false_answer"], "fact_recall": o["fact_recall"]},
+                     indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="eeb")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -183,6 +243,22 @@ def main(argv: list[str] | None = None) -> int:
                     help="model family of the reference agent; paraphrases from it are "
                          "rejected")
     cv.set_defaults(func=cmd_cases_verify)
+    r = sub.add_parser("run", help="run a baseline through the harness")
+    r.add_argument("baseline", choices=["b1", "b2", "b3"])
+    r.add_argument("--instance", required=True)
+    r.add_argument("--cases", required=True, help="cases.jsonl of the corpus")
+    r.add_argument("--split", choices=["dev", "test"], default="dev")
+    r.add_argument("--classes", help="comma-separated case classes (default: all)")
+    r.add_argument("--limit", type=int, default=0)
+    r.add_argument("--upstream", choices=["scripted", "openai"], default="scripted")
+    r.add_argument("--model-id", default="scripted")
+    r.add_argument("--base-url", default="https://api.openai.com/v1")
+    r.add_argument("--out", required=True)
+    r.add_argument("--purpose", help="required for the test split")
+    r.add_argument("--test-runs-log", default="TEST_RUNS.log")
+    r.add_argument("--pg-dsn")
+    r.add_argument("--pg-container")
+    r.set_defaults(func=cmd_run)
     args = p.parse_args(argv)
     return int(args.func(args))
 

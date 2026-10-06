@@ -154,6 +154,24 @@ def cmd_cases_verify(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def cmd_cases_rephrase(args: argparse.Namespace) -> int:
+    """Paraphrase queued questions with an independent model family (Anthropic). The key is
+    read from ANTHROPIC_API_KEY and never written anywhere."""
+    from eeb.cases.paraphrase import dumps_queue, paraphrase_queue
+    from eeb.harness.upstreams import AnthropicUpstream
+
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        sys.exit("ANTHROPIC_API_KEY is not set")
+    path = Path(args.cases) / "rephrase_queue.jsonl"
+    entries = read_jsonl(path)
+    counts = paraphrase_queue(entries, AnthropicUpstream(api_key=key), "anthropic.messages",
+                              args.model, "anthropic", args.reference_family, args.only)
+    path.write_bytes(dumps_queue(entries))
+    print(json.dumps(counts, indent=2))
+    return 0
+
+
 def _git_head() -> str:
     import subprocess
     r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
@@ -243,6 +261,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="model family of the reference agent; paraphrases from it are "
                          "rejected")
     cv.set_defaults(func=cmd_cases_verify)
+    cr = csub.add_parser("rephrase", help="paraphrase the queue with an independent family")
+    cr.add_argument("--cases", required=True)
+    cr.add_argument("--model", required=True, help="exact model id, recorded per entry")
+    cr.add_argument("--reference-family", default="openai")
+    cr.add_argument("--only", choices=["pending", "rejected"], default="pending")
+    cr.set_defaults(func=cmd_cases_rephrase)
     r = sub.add_parser("run", help="run a baseline through the harness")
     r.add_argument("baseline", choices=["b1", "b2", "b3"])
     r.add_argument("--instance", required=True)

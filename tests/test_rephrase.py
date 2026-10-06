@@ -90,6 +90,9 @@ def test_provenance_rules() -> None:
     assert any("reference agent's model family" in p
                for p in rephrase.check(Q_LATE, good, "Family-A", reference_family="family-a"))
     assert rephrase.check(Q_LATE, good, "family-b", reference_family="family-a") == []
+    assert any("reference agent's model family" in p for p in rephrase.check(
+        Q_LATE, good, "openai:some-model-2", reference_family="OpenAI"))
+    assert rephrase.check(Q_LATE, good, "anthropic:some-model", reference_family="openai") == []
     assert "paraphrase is the canonical wording" in rephrase.check(
         Q_LATE, "  " + Q_LATE.upper(), FAMILY)
 
@@ -113,3 +116,44 @@ def test_queue_check_reports_pending_and_rejected() -> None:
 def test_off_contract_is_not_read_as_a_contract_reference() -> None:
     assert "contract" not in rephrase.must_preserve(Q_THRESHOLD)["meaning"]
     assert "contract" in rephrase.must_preserve("the contract CTR-0001")["meaning"]
+
+
+# ------------------------------------------------------------------ filling the queue
+def _queue() -> list[dict[str, object]]:
+    return [{"family_id": f"f{i}", "case_ids": [f"C-{i}"], "class": "S", "template_id": "t",
+             "question_canonical": q, "must_preserve": rephrase.must_preserve(q),
+             "rephrased_question": None, "rephrased_by_model_family": None,
+             "meaning_preserved_check": None} for i, q in enumerate((Q_LATE, Q_OTD))]
+
+
+def test_paraphrase_sends_only_the_question_and_its_anchors() -> None:
+    from eeb.cases.paraphrase import paraphrase_queue
+    from eeb.harness.upstreams import ScriptedUpstream
+    seen: list[str] = []
+
+    def reply(api: str, body: dict[str, object]) -> str:
+        text = body["messages"][0]["content"]  # type: ignore[index]
+        seen.append(str(text))
+        return GOOD[Q_LATE] if "Broustrail" in str(text) else \
+            GOOD[Q_OTD].replace("2024Q4", "2025Q1")      # one faithful, one changed period
+    q = _queue()
+    counts = paraphrase_queue(q, ScriptedUpstream(script=reply), "anthropic.messages",
+                              "model-x", "anthropic", "openai")
+    assert counts == {"asked": 2, "consistent": 1, "rejected": 1, "failed": 0}
+    assert q[0]["rephrased_by_model_family"] == "anthropic:model-x"
+    assert q[0]["meaning_preserved_check"] == {"mechanical": [], "human": None}
+    assert any("2024Q4 missing" in p for p in q[1]["meaning_preserved_check"]["mechanical"])  # type: ignore[index]
+    assert set(seen[0].split("Question: ", 1)[1].split("\n")[0].split()) <= set(Q_LATE.split())
+    # Only rejected entries are asked again; pending ones are done.
+    again = paraphrase_queue(q, ScriptedUpstream(script=lambda a, b: GOOD[Q_OTD]),
+                             "anthropic.messages", "model-x", "anthropic", "openai",
+                             only="rejected")
+    assert again == {"asked": 1, "consistent": 1, "rejected": 0, "failed": 0}
+    assert rephrase.check_queue(q, "openai")["passed"] is True
+
+
+def test_paraphrase_refuses_the_reference_family() -> None:
+    from eeb.cases.paraphrase import paraphrase_queue
+    from eeb.harness.upstreams import ScriptedUpstream
+    with pytest.raises(ValueError, match="reference agent's family"):
+        paraphrase_queue(_queue(), ScriptedUpstream(), "openai.chat", "m", "OpenAI", "openai")

@@ -97,6 +97,11 @@ def must_preserve(question: str) -> dict[str, list[str]]:
     }
 
 
+def family_of(model: str) -> str:
+    """The family part of ``family:model-id`` (or the whole name), case-folded."""
+    return model.split(":", 1)[0].strip().lower()
+
+
 def check(canonical: str, paraphrase: str | None, model_family: str | None,
           reference_family: str | None = None) -> list[str]:
     """Problems with ``paraphrase`` of ``canonical`` (empty: mechanically consistent)."""
@@ -105,7 +110,7 @@ def check(canonical: str, paraphrase: str | None, model_family: str | None,
     out: list[str] = []
     if not model_family or not model_family.strip():
         out.append("paraphrasing model family not recorded")
-    elif reference_family and model_family.strip().lower() == reference_family.strip().lower():
+    elif reference_family and family_of(model_family) == family_of(reference_family):
         out.append(f"paraphrased by {model_family}, the reference agent's model family")
     if " ".join(paraphrase.split()).lower() == " ".join(canonical.split()).lower():
         out.append("paraphrase is the canonical wording")

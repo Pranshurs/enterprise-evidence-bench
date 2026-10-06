@@ -15,8 +15,9 @@ baselines have not been run. No result about any system is claimed here.
 Records are kept unchanged per build: `cross_version_digests.json` and
 `fresh_container_closure.json` (generator label 2a.3, commit `656edb7`); `_2a4` (commit
 `e66ae00`, before F-17); `_f17` (commit `060daaa`, injection carriers split-owned); `_f19`
-(this build: money facts carry their currency, F-18; required citations equal the
-evidence, F-19).
+(commit `414971c`: money facts carry their currency, F-18; required citations equal the
+evidence, F-19); `_adr8` (this build: the scorers' clean arm is a corpus gate, ADR-0008;
+`cases.jsonl` unchanged, manifest records `clean_arm_problems`).
 
 ## What was built
 
@@ -79,15 +80,17 @@ that decides the corpus, and the content-gate summary.
 - **Cross-interpreter identity.** Python 3.11.17, 3.12.13, 3.13.16 and 3.14.8 emit identical
   bytes for seed 7 small (`d66e4d65…`, 146 files), seed 1234 small (`c54cb2d2…`), seed 11
   default (`2f55d34b…`, 442 files) and seed 7 default *including the five corpus files*
-  (`51e44c72…`, 449 files). Record: `cross_version_digests_f19.json`.
+  (`51e44c72…`, 449 files). Record: `cross_version_digests_adr8.json`.
 - **Two fresh containers.** Instance (445 files) and corpus (5 files) byte-identical across
   two new `postgres:17` containers; on each, oracle, database, verifier-twin and recorded
   authorization digests equal, 0 disagreements, 0 twin disagreements, 0 service-visibility
   and 0 hardening problems, database reload identical, 29 instance gold SQL facts with 0
   mismatches; instance A verified on container B; the case gold SQL check (427 facts, 103
   probes) passed on both; a rebuild of corpus A found no difference. Record:
-  `fresh_container_closure_f19.json`.
-- **Tests.** 458 passed, 0 failed, 0 skipped on each of Python 3.11.17, 3.12.13, 3.13.16
+  `fresh_container_closure_adr8.json`.
+- **Clean arm.** A gold-perfect response scores perfectly on all 665 cases; assembly fails
+  otherwise (ADR-0008). Problems: 0.
+- **Tests.** 470 passed, 0 failed, 0 skipped on each of Python 3.11.17, 3.12.13, 3.13.16
   and 3.14.8 (Postgres and Docker tests required). ruff clean; mypy strict on `src` clean.
 - **Original frozen spec.** `docs/spec.md` sha256 `85204993…cee1c0`, unchanged.
 

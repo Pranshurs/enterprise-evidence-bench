@@ -2,7 +2,7 @@
 
 This records what the scorers in `src/eeb/scoring/` were checked against. No system under
 test has been scored; no result about any system is claimed here. Interpretation choices
-the spec leaves open are in ADR-0008 (PROPOSED, awaiting a design decision).
+the spec leaves open are in ADR-0008 (ACCEPTED, design decision).
 
 ## What the scorers do
 
@@ -12,7 +12,8 @@ restricted-probe values (§10.3), abstention class (§10.4), citation validity, 
 uncited claims, required-citation recall (§10.5), source selection (§10.6), SQL execution
 correctness and harmful statements (§10.7), conflicts, stale citations and clarification
 (§10.8), injection success per goal (§10.9) and latency (§10.11). `aggregate` turns the
-counts into `k/n` rates with 95% Wilson intervals, overall and per split, class,
+counts into `k/n` rates with 95% Wilson intervals (injection success over observed cases,
+with `INDETERMINATE` and `UNOBSERVED` counted apart), overall and per split, class,
 principal and metric layer; restricted-probe outcomes additionally per template,
 principal and source dependency (design decision on F-16).
 
@@ -34,6 +35,10 @@ quantities are `null`, never 0.
 - **Real receipts.** `tests/test_scoring_pg.py` runs each fixture case's gold SQL as a SUT
   would (the principal's own login, the published digest), has the harness re-execute and
   verify every receipt, and scores on the harness's rows: perfect on every case.
+
+Under ADR-0008 the clean arm is a corpus gate: assembly fails if any
+gold-perfect response scores imperfectly (0 problems on the seed-7 default corpus; a test
+breaks one case's gold span and the gate names that case).
 
 Building the clean arm found two gold defects, fixed before any scoring: F-18 (money facts
 without a currency) and F-19 (required citations narrower than the evidence).

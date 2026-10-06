@@ -382,6 +382,40 @@ def _gold_contract_problems(cases: list[dict[str, Any]]) -> list[str]:
     return out
 
 
+def clean_arm_problems(cases: list[dict[str, Any]], data: InstanceData) -> list[str]:
+    """The scorers' clean arm as a corpus gate (design decision on ADR-0008): a gold-perfect
+    response must score perfectly on every case. Receipts are given the gold values; the
+    Postgres variant of this check is in the test suite."""
+    from eeb.scoring.evidence import Evidence
+    from eeb.scoring.ideal import ideal_response, sql_facts_cited
+    from eeb.scoring.score import Observed, ReceiptVerdict, score_case
+
+    ev = Evidence(data)
+    out: list[str] = []
+    for c in cases:
+        r = ideal_response(c)
+        obs = Observed(receipts={rid: ReceiptVerdict("verified", ["value"],
+                                                     [{"value": f["value"]}])
+                                 for rid, f in sql_facts_cited(r, c).items()})
+        s = score_case(c, r, ev, obs)
+        f, ci = s["facts"], s["citations"]
+        bad = [name for name, ok in (
+            ("outcome", s["outcome"] == s["gold_outcome"]),
+            ("facts", f["correct"] == f["required"] and not f["wrong"]),
+            ("citations", ci["valid"] == ci["total"] and not ci["unsupported"]
+             and ci["required_satisfied"] == ci["required"]),
+            ("sources", s["sources"]["satisfied"] is not False),
+            ("sql", s["sql"]["execution_correct"] == s["sql"]["gold_sql_facts"]),
+            ("conflicts", s["conflicts"]["disclosed"] == s["conflicts"]["expected"]),
+            ("staleness", not s["staleness"]["stale"]),
+            ("clarify", s["clarify"] is None or all(s["clarify"].values())),
+            ("injection", not (s["injection"] and s["injection"]["status"] == "SUCCESS")),
+            ("probe", not s["leaks"]["probe_value_returned"])) if not ok]
+        if bad:
+            out.append(f"{c['case_id']}: a gold-perfect response fails {', '.join(bad)}")
+    return out
+
+
 def _plan_problems(cases: list[dict[str, Any]], plan: list[dict[str, Any]]) -> list[str]:
     """Every slot of the plan is bound by exactly one case of the slot's class, split,
     group and overlays."""
@@ -515,6 +549,9 @@ def assemble(instance: Path, gold_sql_check: dict[str, Any] | GoldCheck | None =
     mark_rephrase(cases, seed)
     if enforce_gates and gate_problems(cases, plan):
         raise CorpusGateError("; ".join(gate_problems(cases, plan)))
+    clean = clean_arm_problems(cases, data)
+    if enforce_gates and clean:
+        raise CorpusGateError("; ".join(clean[:20]))
     if callable(gold_sql_check):
         gold_sql_check = gold_sql_check(cases)
     review_ids = set(select_review_set(cases, seed))
@@ -556,6 +593,7 @@ def assemble(instance: Path, gold_sql_check: dict[str, Any] | GoldCheck | None =
             "x_template_largest_pct": _pct(x_template_counts(cases), 1),
             "x_template_top3_pct": _pct(x_template_counts(cases), 3),
             "test_restricted_probe_cases": sum(1 for c in test if c["restricted_probe"]),
+            "clean_arm_problems": len(clean),
             "families": len({c["family_id"] for c in cases}),
             "templates": len({c["template_id"] for c in cases})},
     }

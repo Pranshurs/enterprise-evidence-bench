@@ -243,3 +243,34 @@ def test_build_gate_gold_check_detects_a_wrong_gold_value(pg_dsn: str, built_db:
     path.write_text("".join(json.dumps(f) + "\n" for f in facts))
     out = check_gold_sql(pg_dsn, bad, built_db)
     assert [m["fact_id"] for m in out["mismatches"]] == [target["fact_id"]]
+
+
+# ---------------------------------------------------------------- verifier twins and Mode S
+def test_verifier_twins_see_exactly_what_their_principals_see(pg_dsn: str, built_db: str,
+                                                              instance_dir: Path) -> None:
+    pids = [json.loads(x)["principal_id"]
+            for x in (instance_dir / "principals.jsonl").read_text().splitlines()]
+    principals = agreement.db_outcome(pg_dsn, built_db, pids)
+    twins = agreement.db_outcome(pg_dsn, built_db, pids, verifier=True)
+    assert agreement.compare(principals, twins) == []
+
+
+def _service(pg_dsn: str, ns: str) -> psycopg.Connection[Any]:
+    return psycopg.connect(dsn_for(pg_dsn, ns, sqlgen.service_role(ns),
+                                   sqlgen.service_password(ns)), autocommit=True)
+
+
+def test_service_login_sees_all_rows_of_granted_objects_only(
+        pg_dsn: str, built_db: str, tables: dict[str, list[dict[str, Any]]]) -> None:
+    with _service(pg_dsn, built_db) as conn:
+        for t in ("suppliers", "purchase_orders", "invoices", "doc_chunks", "budgets",
+                  "supplier_risk_ratings"):
+            n = conn.execute(f"SELECT count(*) FROM eeb.{t}").fetchone()[0]  # type: ignore[index]
+            assert n == len(tables[t]), t
+        for stmt in ("SELECT * FROM eeb.supplier_bank_accounts",
+                     "SELECT contact_name FROM eeb.supplier_contacts",
+                     "SELECT email FROM eeb.supplier_contacts",
+                     "DELETE FROM eeb.purchase_orders",
+                     "UPDATE eeb_sec.clock SET today = '2020-01-01'"):
+            with pytest.raises(errors.InsufficientPrivilege):
+                conn.execute(stmt)

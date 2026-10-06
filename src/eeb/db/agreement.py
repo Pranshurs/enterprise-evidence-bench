@@ -28,13 +28,18 @@ def _key(v: Any) -> str:
     return v.isoformat() if isinstance(v, dt.date) else str(v)
 
 
-def db_outcome(admin_dsn: str, ns: str, principal_ids: list[str]) -> dict[str, dict[str, Any]]:
+def db_outcome(admin_dsn: str, ns: str, principal_ids: list[str],
+               verifier: bool = False) -> dict[str, dict[str, Any]]:
+    """Measured visibility per principal (``verifier=True`` measures the harness twins)."""
     out: dict[str, dict[str, Any]] = {}
     with admin(admin_dsn, ns) as adm:
         for pid in principal_ids:
-            login = sqlgen.login_role(ns, pid)
+            if verifier:
+                login, pw = sqlgen.verifier_role(ns, pid), sqlgen.verifier_password(ns, pid)
+            else:
+                login, pw = sqlgen.login_role(ns, pid), sqlgen.login_password(ns, pid)
             per: dict[str, Any] = {}
-            dsn = dsn_for(admin_dsn, ns, login, sqlgen.login_password(ns, pid))
+            dsn = dsn_for(admin_dsn, ns, login, pw)
             with psycopg.connect(dsn, autocommit=True) as conn:
                 for t in TABLES:
                     pk = ", ".join(sqlgen.qi(c) for c in t.pk)
@@ -117,8 +122,9 @@ def hardening_checks(admin_dsn: str, ns: str, principal_ids: list[str]) -> list[
                 "AND c.relkind = 'r'", (SCHEMA,)):
             if not (rls and force):
                 problems.append(f"{name}: row level security not enabled and forced")
-        for pid in principal_ids:
-            login = sqlgen.login_role(ns, pid)
+        logins = [f(ns, pid) for pid in principal_ids
+                  for f in (sqlgen.login_role, sqlgen.verifier_role)] + [sqlgen.service_role(ns)]
+        for login in logins:
             row = conn.execute(
                 "SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication "
                 "FROM pg_roles WHERE rolname = %s", (login,)).fetchone()

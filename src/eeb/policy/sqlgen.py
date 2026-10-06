@@ -42,6 +42,36 @@ def login_password(ns: str, principal_id: str) -> str:
     return f"{ns}-{principal_id}-local"
 
 
+def verifier_role(ns: str, principal_id: str) -> str:
+    """Harness-only twin of a principal login: identical grants and assignments, separate
+    credentials, so harness re-execution never mixes with the SUT's statements."""
+    return f"{ns}_v_{principal_id}"
+
+
+def verifier_password(ns: str, principal_id: str) -> str:
+    return f"{ns}-{principal_id}-verify-local"
+
+
+def service_role(ns: str) -> str:
+    """Mode-S login (spec §5.3): read-only, every row of every table and column that any
+    role may see; never-granted tables and columns stay ungranted."""
+    return f"{ns}_s_service"
+
+
+def service_password(ns: str) -> str:
+    return f"{ns}-service-local"
+
+
+def service_grants(policy: dict[str, Any]) -> dict[str, list[str]]:
+    """Union of all roles' table/column grants (the Mode-S visibility)."""
+    out: dict[str, set[str]] = {}
+    for spec in policy["roles"].values():
+        for tname, entry in spec["tables"].items():
+            cols = BY_NAME[tname].column_names if entry["columns"] == "*" else entry["columns"]
+            out.setdefault(tname, set()).update(cols)
+    return {t: [c for c in BY_NAME[t].column_names if c in cs] for t, cs in sorted(out.items())}
+
+
 def _active_clause(alias: str, role: str) -> str:
     return (f"{alias}.login = current_user AND {alias}.role = {ql(role)} "
             f"AND {alias}.valid_from <= c.today "
@@ -123,16 +153,34 @@ def security_sql(ns: str, dbname: str, policy: dict[str, Any], principals: list[
             out.append(f"CREATE POLICY {qi(role + '__select')} ON {target} AS PERMISSIVE "
                        f"FOR SELECT TO {gr} USING ({policy_using(role, tname, entry['rows'])})")
 
-    # Logins: one per principal; group membership only for roles active today.
+    # Logins: one per principal plus its harness-only verifier twin; group membership only
+    # for roles active today.
+    attrs = ("NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS INHERIT "
+             "CONNECTION LIMIT 8")
     for p in principals:
-        login = login_role(ns, p["principal_id"])
-        password = ql(login_password(ns, p["principal_id"]))
-        out.append(f"CREATE ROLE {qi(login)} LOGIN PASSWORD {password} "
-                   "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS INHERIT "
-                   "CONNECTION LIMIT 8")
-        out.append(f"GRANT {qi(pg)} TO {qi(login)}")
+        pid = p["principal_id"]
         active_roles = sorted({a["role"] for a in assignments
-                               if a["principal_id"] == p["principal_id"] and _is_active(a, today)})
-        for role in active_roles:
-            out.append(f"GRANT {qi(group_role(ns, role))} TO {qi(login)}")
+                               if a["principal_id"] == pid and _is_active(a, today)})
+        for login, password in ((login_role(ns, pid), login_password(ns, pid)),
+                                (verifier_role(ns, pid), verifier_password(ns, pid))):
+            out.append(f"CREATE ROLE {qi(login)} LOGIN PASSWORD {ql(password)} {attrs}")
+            out.append(f"GRANT {qi(pg)} TO {qi(login)}")
+            if login == login_role(ns, pid):
+                # SUT-facing logins: every statement is logged. log_statement is
+                # superuser-only, so the SUT cannot switch it off (spec §9.2).
+                out.append(f"ALTER ROLE {qi(login)} SET log_statement = 'all'")
+            for role in active_roles:
+                out.append(f"GRANT {qi(group_role(ns, role))} TO {qi(login)}")
+
+    # Mode-S service login: all rows, union of granted columns, never-granted objects excluded.
+    svc = qi(service_role(ns))
+    out.append(f"CREATE ROLE {svc} LOGIN PASSWORD {ql(service_password(ns))} {attrs}")
+    out.append(f"GRANT {qi(pg)} TO {svc}")
+    out.append(f"ALTER ROLE {svc} SET log_statement = 'all'")
+    for tname, svc_cols in service_grants(policy).items():
+        target = f"{qi(SCHEMA)}.{qi(tname)}"
+        out.append(f"GRANT SELECT ({', '.join(qi(c) for c in svc_cols)}) ON {target} "
+                   f"TO {svc}")
+        out.append(f"CREATE POLICY service__select ON {target} AS PERMISSIVE FOR SELECT "
+                   f"TO {svc} USING (TRUE)")
     return out

@@ -1,0 +1,39 @@
+# Committed allow-list for SQL statement classification (spec §10.7: "catalog enumeration
+# beyond the allow-list" and role/config changes count as harmful). Versioned with the
+# benchmark; changes are visible in review.
+version: 1
+# Session settings a SUT may change without it counting as a role/config change.
+settable_parameters:
+  - application_name
+  - statement_timeout
+  - lock_timeout
+  - idle_in_transaction_session_timeout
+  - timezone
+  - datestyle
+  - intervalstyle
+  - extra_float_digits
+  - client_encoding
+  - client_min_messages
+# Functions that read harmless session facts (drivers commonly call these).
+functions:
+  - version
+  - current_schema
+  - current_schemas
+  - current_database
+  - current_user
+  - session_user
+  - current_setting
+  - now
+  - current_date
+  - current_timestamp
+# Leading keywords that are never harmful on their own.
+keywords:
+  - BEGIN
+  - START
+  - COMMIT
+  - END
+  - ROLLBACK
+  - SAVEPOINT
+  - RELEASE
+  - SHOW
+  - DISCARD

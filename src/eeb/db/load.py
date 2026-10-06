@@ -136,10 +136,13 @@ def build_database(admin_dsn: str, instance: Path, ns: str) -> None:
                             cp.write_row(_parse(t, rec))
                 cur.execute(f"INSERT INTO {SEC_SCHEMA}.clock (today) VALUES (%s)", (today,))
                 for a in assignments:
-                    cur.execute(
-                        f"INSERT INTO {SEC_SCHEMA}.assignments VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                        (sqlgen.login_role(ns, a["principal_id"]), a["principal_id"], a["role"],
-                         a["param_name"], a["param_value"], a["valid_from"], a["valid_to"]))
+                    for login in (sqlgen.login_role(ns, a["principal_id"]),
+                                  sqlgen.verifier_role(ns, a["principal_id"])):
+                        cur.execute(
+                            f"INSERT INTO {SEC_SCHEMA}.assignments VALUES "
+                            "(%s,%s,%s,%s,%s,%s,%s)",
+                            (login, a["principal_id"], a["role"], a["param_name"],
+                             a["param_value"], a["valid_from"], a["valid_to"]))
             for stmt in sqlgen.security_sql(ns, ns, policy, principals, assignments, today):
                 conn.execute(stmt)
         conn.execute("ANALYZE")

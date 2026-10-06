@@ -11,8 +11,10 @@ system:
 
 The frozen design is in [`docs/spec.md`](docs/spec.md) (v1, byte-frozen).
 
-> **Status: Phase 2a (deterministic corpus and policy substrate).** There is no harness,
-> gateway, scorer or reference agent yet. Nothing here should be read as benchmark results.
+> **Status: Phase 2b in progress.** Built so far: the deterministic corpus and policy
+> substrate, the exposure registry, the recording model gateway with Docker isolation, and
+> database statement observation with receipt verification. There are no cases, scorers
+> or reference agent yet. Nothing here should be read as benchmark results.
 
 ## What exists today
 
@@ -40,12 +42,13 @@ You need Python ≥ 3.11 and a local Postgres 17 you can administer. For example
 
 ```bash
 docker run -d --name eeb-pg -e POSTGRES_USER=eebadmin -e POSTGRES_PASSWORD=eebadmin \
-  -p 127.0.0.1:55432:5432 postgres:17
+  -p 127.0.0.1:55432:5432 postgres:17 -c logging_collector=on -c log_destination=jsonlog \
+  -c log_directory=log -c log_filename=postgresql.log
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 export EEB_PG_ADMIN_DSN="postgresql://eebadmin:eebadmin@127.0.0.1:55432/postgres"
 .venv/bin/eeb build --seed 7 --out instances/seed7          # small scale
 .venv/bin/eeb build --seed 7 --scale default --out instances/seed7-default
-EEB_REQUIRE_PG=1 .venv/bin/pytest -q
+EEB_REQUIRE_PG=1 EEB_PG_CONTAINER=eeb-pg EEB_REQUIRE_DOCKER=1 .venv/bin/pytest -q
 ```
 
 The Postgres credentials above are for a throwaway local fixture.

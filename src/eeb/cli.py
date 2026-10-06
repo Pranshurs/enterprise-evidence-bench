@@ -1,4 +1,4 @@
-"""Command line: ``eeb build`` and ``eeb verify``.
+"""Command line: ``eeb build``, ``eeb verify`` and ``eeb cases``.
 
 ``build`` is the only supported way to produce an instance. It generates into a temporary
 sibling directory, builds a fresh database, and runs the policy agreement and hardening
@@ -14,8 +14,11 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 from eeb import canonical
+from eeb.cases import corpus
+from eeb.cases.dbcheck import check_case_gold_sql
 from eeb.db import agreement
 from eeb.db.gold_check import check_gold_sql
 from eeb.db.load import build_database, drop, export_tables, read_instance
@@ -97,6 +100,53 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 1
 
 
+class GoldSqlError(Exception):
+    pass
+
+
+def cmd_cases_build(args: argparse.Namespace) -> int:
+    instance, out = Path(args.instance), Path(args.out)
+    if out.exists():
+        sys.exit(f"{out} already exists; case corpora are never overwritten")
+    check = None
+    if args.pg_dsn or os.environ.get("EEB_PG_ADMIN_DSN"):
+        dsn = _dsn(args.pg_dsn)
+        ns = "eeb_c" + read_instance(instance)["instance_digest"][:11]
+
+        def check(cases: list[dict[str, Any]]) -> dict[str, Any]:
+            build_database(dsn, instance, ns)
+            try:
+                r = check_case_gold_sql(dsn, ns, cases)
+            finally:
+                drop(dsn, ns)
+            if r["problems"]:
+                raise GoldSqlError(r)
+            return {"status": "passed", "sql_facts_checked": r["sql_facts_checked"],
+                    "restricted_probes_checked": r["restricted_probes_checked"],
+                    "principals": r["principals"]}
+    try:
+        files = corpus.assemble(instance, check)
+    except GoldSqlError as e:
+        print(json.dumps(e.args[0], indent=2), file=sys.stderr)
+        print("CASE BUILD FAILED: a SQL gold fact does not hold under its principal's login",
+              file=sys.stderr)
+        return 1
+    tmp = out.with_name(out.name + ".partial")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    for name, blob in files.items():
+        (tmp / name).write_bytes(blob)
+    tmp.rename(out)
+    print(files["MANIFEST.json"].decode("utf-8"), end="")
+    return 0
+
+
+def cmd_cases_verify(args: argparse.Namespace) -> int:
+    problems = corpus.verify(Path(args.cases), Path(args.instance))
+    print(json.dumps({"problems": problems, "passed": not problems}, indent=2))
+    return 1 if problems else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="eeb")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -111,6 +161,18 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--instance", required=True)
     v.add_argument("--pg-dsn")
     v.set_defaults(func=cmd_verify)
+    c = sub.add_parser("cases", help="build or verify the case corpus of an instance")
+    csub = c.add_subparsers(dest="cases_cmd", required=True)
+    cb = csub.add_parser("build", help="bind the frozen plan to validated cases")
+    cb.add_argument("--instance", required=True)
+    cb.add_argument("--out", required=True)
+    cb.add_argument("--pg-dsn", help="also re-execute every SQL gold under its principal's "
+                                     "login (default: EEB_PG_ADMIN_DSN when set)")
+    cb.set_defaults(func=cmd_cases_build)
+    cv = csub.add_parser("verify", help="rebuild from the instance and compare")
+    cv.add_argument("--cases", required=True)
+    cv.add_argument("--instance", required=True)
+    cv.set_defaults(func=cmd_cases_verify)
     args = p.parse_args(argv)
     return int(args.func(args))
 

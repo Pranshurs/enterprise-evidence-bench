@@ -91,6 +91,10 @@ def phrase_credit_rate(c: Decimal) -> str:
     return f"a service credit of {c}% of the credit base"
 
 
+def phrase_quality(q: Decimal) -> str:
+    return f"exceed {q}% of the quantity received"
+
+
 def phrase_cap(cap: Decimal) -> str:
     return f"capped at {cap}% of the credit base"
 
@@ -190,6 +194,10 @@ class DocumentBuilder:
                             "The credit base is the value (quantity multiplied by unit price) of "
                             "the order lines with a promised delivery date in the quarter. "
                             f"Service credits for a quarter are {phrase_cap(c.sla_cap_pct)}."),
+                    Section("quality", "Quality",
+                            "Rejected quantity on goods receipts must not "
+                            f"{phrase_quality(c.quality_threshold_pct)} in any calendar "
+                            "quarter."),
                     Section("exclusions", "Exclusions",
                             "Deliveries delayed by (a) a force majeure event recorded in an "
                             f"{COMPANY} incident report classified as force majeure, or (b) a "

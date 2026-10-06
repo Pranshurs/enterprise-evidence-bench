@@ -60,7 +60,8 @@ metrics:
       on time. This is the RAW rate: no contractual exclusions are applied.
     view: deliveries
     measure: >-
-      round(100.0 * count(*) FILTER (WHERE received_date <= promised_date) / count(*), 2)
+      round(100.0 * count(*) FILTER (WHERE received_date <= promised_date)
+      / nullif(count(*), 0), 2)
     dimensions: [supplier_id, bu_id, promised_quarter]
     filters: [supplier_id, bu_id, promised_quarter]
     always_group_by: []

@@ -99,6 +99,7 @@ class ContractInfo:
     sla_threshold_pct: Decimal
     sla_credit_pct_per_point: Decimal
     sla_cap_pct: Decimal
+    quality_threshold_pct: Decimal
     items: list[str]
     indexation: dict[str, Any] | None = None  # set by scenario S1
     # Set when the signed agreement states different terms than the system record
@@ -282,6 +283,8 @@ class DomainBuilder:
                     sla_credit_pct_per_point=s.choice((Decimal("0.5"), Decimal("1.0"),
                                                        Decimal("1.5"))),
                     sla_cap_pct=s.choice((Decimal(5), Decimal(8), Decimal(10))),
+                    quality_threshold_pct=s.choice((Decimal("1.0"), Decimal("1.5"),
+                                                    Decimal("2.0"), Decimal("2.5"))),
                     items=sorted(s.sample(cat_items, k)),
                 )
                 self.w.contracts[cid] = info

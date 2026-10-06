@@ -80,11 +80,17 @@ class Agreement:
     db_digest: str = ""
     oracle_digest: str = ""
     recorded_digest: str = ""
+    twin_disagreements: list[dict[str, Any]] = field(default_factory=list)
+    twin_digest: str = ""
+    service_problems: list[str] = field(default_factory=list)
+    service_digest: str = ""
 
     @property
     def ok(self) -> bool:
         return (not self.disagreements and not self.hardening
-                and self.db_digest == self.oracle_digest == self.recorded_digest)
+                and not self.twin_disagreements and not self.service_problems
+                and self.db_digest == self.oracle_digest == self.recorded_digest
+                == self.twin_digest)
 
 
 def compare(db: dict[str, dict[str, Any]], ora: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -159,15 +165,93 @@ def hardening_checks(admin_dsn: str, ns: str, principal_ids: list[str]) -> list[
     return problems
 
 
+def service_outcome(admin_dsn: str, ns: str) -> dict[str, Any]:
+    """Measured Mode-S visibility, in the same shape as a principal's outcome."""
+    login, pw = sqlgen.service_role(ns), sqlgen.service_password(ns)
+    per: dict[str, Any] = {}
+    with admin(admin_dsn, ns) as adm, psycopg.connect(
+            dsn_for(admin_dsn, ns, login, pw), autocommit=True) as conn:
+        for t in TABLES:
+            pk = ", ".join(sqlgen.qi(c) for c in t.pk)
+            try:
+                rows = conn.execute(f"SELECT {pk} FROM {SCHEMA}.{sqlgen.qi(t.name)}")
+                keys, privileged = sorted([_key(v) for v in r] for r in rows), True
+            except errors.InsufficientPrivilege:
+                keys, privileged = [], False
+            cols = [c for c in t.column_names if adm.execute(
+                "SELECT has_column_privilege(%s, %s, %s, 'SELECT')",
+                (login, f"{SCHEMA}.{t.name}", c)).fetchone()[0]]  # type: ignore[index]
+            per[t.name] = {"privileged": privileged, "columns": sorted(cols), "rows": keys}
+    return per
+
+
+def expected_service_outcome(instance: Path) -> dict[str, Any]:
+    """Mode-S expectation from the policy file: every row of the union of role grants."""
+    from eeb.db.load import _parse
+    from eeb.policy.oracle import pk_key
+
+    policy = pschema.load_policy((instance / "policy.yaml").read_bytes())
+    grants = sqlgen.service_grants(policy)
+    per: dict[str, Any] = {}
+    for t in TABLES:
+        if t.name not in grants:
+            per[t.name] = {"privileged": False, "columns": [], "rows": []}
+            continue
+        recs = read_jsonl(instance / f"tables/{t.name}.jsonl")
+        rows = sorted(list(pk_key(t.name, dict(zip(t.column_names, _parse(t, r), strict=True))))
+                      for r in recs)
+        per[t.name] = {"privileged": True, "columns": sorted(grants[t.name]), "rows": rows}
+    return per
+
+
+def logging_checks(admin_dsn: str, ns: str, principal_ids: list[str]) -> list[str]:
+    """Statement-observation configuration the DB-side evidence depends on (ADR-0006)."""
+    problems: list[str] = []
+    with admin(admin_dsn, ns) as conn:
+        def show(name: str) -> str:
+            return str(conn.execute(f"SHOW {name}").fetchone()[0])  # type: ignore[index]
+
+        if show("logging_collector") != "on":
+            problems.append("logging_collector is not on")
+        if "jsonlog" not in show("log_destination"):
+            problems.append("log_destination does not include jsonlog")
+        if show("log_statement") != "none":
+            problems.append("server-wide log_statement must be none (harness statements "
+                            "would be logged)")
+
+        def config(role: str) -> list[str]:
+            row = conn.execute("SELECT rolconfig FROM pg_roles WHERE rolname = %s",
+                               (role,)).fetchone()
+            return list(row[0] or []) if row else []
+
+        for pid in principal_ids:
+            if "log_statement=all" not in config(sqlgen.login_role(ns, pid)):
+                problems.append(f"{pid}: SUT login is not statement-logged")
+            if any(c.startswith("log_statement") for c in config(sqlgen.verifier_role(ns, pid))):
+                problems.append(f"{pid}: verifier twin must not be statement-logged")
+        if "log_statement=all" not in config(sqlgen.service_role(ns)):
+            problems.append("service login is not statement-logged")
+    return problems
+
+
 def check(admin_dsn: str, instance: Path, ns: str) -> Agreement:
     meta = read_instance(instance)
     principals = [p["principal_id"] for p in read_jsonl(instance / "principals.jsonl")]
     db = db_outcome(admin_dsn, ns, principals)
+    twins = db_outcome(admin_dsn, ns, principals, verifier=True)
     ora = oracle_outcome(instance)
+    svc, svc_expected = service_outcome(admin_dsn, ns), expected_service_outcome(instance)
+    svc_problems = [f"{t}: {k}" for t in svc for k in ("privileged", "columns", "rows")
+                    if svc[t][k] != svc_expected[t][k]]
     return Agreement(
         disagreements=compare(db, ora),
-        hardening=hardening_checks(admin_dsn, ns, principals),
+        hardening=hardening_checks(admin_dsn, ns, principals)
+        + logging_checks(admin_dsn, ns, principals),
         db_digest=summarize_outcome(db)["digest"],
         oracle_digest=summarize_outcome(ora)["digest"],
         recorded_digest=meta["authorization_outcome_digest"],
+        twin_disagreements=compare(twins, db),
+        twin_digest=summarize_outcome(twins)["digest"],
+        service_problems=svc_problems,
+        service_digest=summarize_outcome({"service": svc})["digest"],
     )

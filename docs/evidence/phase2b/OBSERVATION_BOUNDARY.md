@@ -43,3 +43,11 @@ limitation. This needs ratification before the scorer freezes.
 - receipt re-execution;
 - the remaining scorers;
 - baselines B1–B3.
+
+## Addendum (ADR-0005 acceptance)
+
+The in-process inference tests added with ADR-0005 demonstrate that an undeclared
+in-process inference path can evade the observation boundary. A false `gateway_only`
+declaration is outside what the harness can independently falsify. OBSERVED applies only
+to `externally_mediated_model_context` and is not proof that no embedded inference
+occurred.

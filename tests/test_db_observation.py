@@ -19,7 +19,7 @@ from psycopg import errors
 from eeb.db.load import admin, dsn_for
 from eeb.harness.dbobserve import attribute, mark, read_container_log, summarize
 from eeb.harness.gateway import new_request_id
-from eeb.harness.receipts import result_digest, verify_receipt
+from eeb.harness.receipts import cursor_digest, result_digest, verify_receipt
 from eeb.policy import sqlgen
 
 pytestmark = pytest.mark.pg
@@ -179,9 +179,11 @@ def _sut_receipt(pg_dsn: str, ns: str, pid: str, sql: str, params: Any = None,
 
     def body() -> None:
         with sut(pg_dsn, ns, pid, service=service) as c:
-            rows = c.execute(sql, params).fetchall()  # type: ignore[arg-type]
+            cur = c.execute(sql, params)  # type: ignore[arg-type]
+            rows = cur.fetchall()
             holder["receipt"] = {"receipt_id": "r1", "sql": sql, "params": params,
-                                 "result_digest": result_digest(rows), "rowcount": len(rows)}
+                                 "result_digest": cursor_digest(cur, rows),
+                                 "rowcount": len(rows)}
     return run_window(pg_dsn, ns, body), holder["receipt"]
 
 
@@ -211,7 +213,8 @@ def test_fabricated_receipt_was_never_executed_by_the_sut(pg_dsn: str, built_db:
                                                          container: str) -> None:
     sql = "SELECT count(*) FROM eeb.suppliers"
     with sut(pg_dsn, built_db, "cm_met") as c:  # computed outside any window
-        digest = result_digest(c.execute(sql).fetchall())
+        cur = c.execute(sql)
+        digest = cursor_digest(cur, cur.fetchall())
     rid = run_window(pg_dsn, built_db, lambda: None)  # the SUT ran nothing in the window
     check = verify_receipt(pg_dsn, built_db, "cm_met",
                            {"receipt_id": "f", "sql": sql, "result_digest": digest}, "P",
@@ -226,6 +229,7 @@ def test_mode_s_receipt_beyond_the_principal_is_authorization_exceeded(
     check = verify_receipt(pg_dsn, built_db, "cm_met", receipt, "S",
                            _statements(pg_dsn, built_db, container, rid))
     assert check.status == "authorization_exceeded" and check.executed_by_sut
+    assert check.status != "verified"  # the fallback diagnoses; it never upgrades
     # In Mode P the same receipt is simply a mismatch (no service fallback).
     assert verify_receipt(pg_dsn, built_db, "cm_met", receipt, "P", []).status == \
         "digest_mismatch"
@@ -247,12 +251,71 @@ def test_invalid_receipt(pg_dsn: str, built_db: str) -> None:
                           []).status == "invalid_receipt"
 
 
-def test_result_digest_ignores_row_order_and_decimal_scale() -> None:
+COLS = [("id", 23), ("amount", 1700)]
+
+
+def test_digest_is_a_multiset_by_default() -> None:
     from decimal import Decimal
 
-    a = result_digest([(1, Decimal("2.50")), (2, None)])
-    b = result_digest([(2, None), (1, Decimal("2.5"))])
-    assert a == b and a != result_digest([(1, Decimal("2.51")), (2, None)])
+    a = result_digest(COLS, [(1, Decimal("2.50")), (2, None)])
+    assert a == result_digest(COLS, [(2, None), (1, Decimal("2.5"))])  # order, scale
+    assert a != result_digest(COLS, [(1, Decimal("2.51")), (2, None)])  # value
+
+
+def test_digest_preserves_duplicates_nulls_types_and_columns() -> None:
+    base = result_digest(COLS, [(1, None)])
+    assert base != result_digest(COLS, [(1, None), (1, None)])  # duplicates
+    assert base != result_digest(COLS, [(1, "")])  # NULL is not empty string
+    assert base != result_digest(COLS, [("1", None)])  # int is not text
+    assert base != result_digest([("id", 20), ("amount", 1700)], [(1, None)])  # type OID
+    assert base != result_digest([("supplier_id", 23), ("amount", 1700)], [(1, None)])  # name
+    assert result_digest(COLS, [(True, None)]) != result_digest(COLS, [(1, None)])
+
+
+def test_ordered_receipts_keep_row_order() -> None:
+    rows = [(1, None), (2, None)]
+    assert result_digest(COLS, rows, ordered=True) != result_digest(
+        COLS, list(reversed(rows)), ordered=True)
+    assert result_digest(COLS, rows) != result_digest(COLS, rows, ordered=True)
+
+
+def test_ordered_receipt_reexecution(pg_dsn: str, built_db: str) -> None:
+    sql = "SELECT supplier_id FROM eeb.suppliers WHERE category_id = 'CAT-MET' ORDER BY 1 DESC"
+    with sut(pg_dsn, built_db, "cm_met") as c:
+        cur = c.execute(sql)
+        rows = cur.fetchall()
+        good = cursor_digest(cur, rows, ordered=True)
+        reversed_digest = cursor_digest(cur, list(reversed(rows)), ordered=True)
+    ok = verify_receipt(pg_dsn, built_db, "cm_met",
+                        {"receipt_id": "o", "sql": sql, "result_digest": good, "ordered": True},
+                        "P", [])
+    bad = verify_receipt(pg_dsn, built_db, "cm_met",
+                         {"receipt_id": "o", "sql": sql, "result_digest": reversed_digest,
+                          "ordered": True}, "P", [])
+    assert ok.status == "verified" and bad.status == "digest_mismatch"
+
+
+def test_window_attribution_assumes_serialized_windows() -> None:
+    """Synthetic log: overlapping windows are flagged, statements between windows are
+    unattributed. Concurrent windows would need session identity in the key (ADR-0006)."""
+    from eeb.harness.dbobserve import attribute
+
+    a, b = "a" * 32, "b" * 32
+
+    def marker(kind: str, rid: str) -> dict[str, Any]:
+        return {"dbname": "db", "user": "admin", "error_severity": "LOG",
+                "message": f"statement: SELECT 'eeb-marker:{kind}:{rid}'"}
+
+    def stmt(sql: str, sid: str = "s1") -> dict[str, Any]:
+        return {"dbname": "db", "user": "sut", "error_severity": "LOG", "session_id": sid,
+                "message": f"statement: {sql}"}
+
+    entries = [marker("open", a), stmt("SELECT 1"), marker("close", a), stmt("SELECT 2"),
+               marker("open", a), marker("open", b), stmt("SELECT 3"), marker("close", b)]
+    per, unattributed, anomalies = attribute(entries, "db", {"sut"}, "admin")
+    assert [s.sql for s in per[a]] == ["SELECT 1"]
+    assert [s.sql for s in unattributed] == ["SELECT 2"]
+    assert any(x["reason"] == "nested_window" for x in anomalies)
 
 
 @pytest.mark.parametrize("mutant", ["outcome_always_succeeded", "classifier_blind",

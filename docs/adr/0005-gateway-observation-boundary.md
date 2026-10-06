@@ -96,5 +96,16 @@ enforced isolation". It does not mean every token any model consumed.
   only the question through the gateway. Declared `mixed`, `embedded` or undeclared, it is
   UNOBSERVED in every case.
 - *False declaration.* The same SUT falsely declaring `gateway_only` gets OBSERVED/0 within
-  scope. The test proves that the locally consumed restricted tokens are absent from
-  everything the harness recorded. This is the stated, undetectable limit of the boundary.
+  scope, and the locally consumed restricted tokens are absent from everything the
+  harness recorded.
+
+**What this test does and does not show** (scope clarification, 2026-10-06):
+
+> The adversarial test demonstrates that an undeclared in-process inference path can evade
+> the observation boundary. A false `gateway_only` declaration is therefore outside what
+> the harness can independently falsify. OBSERVED applies only to
+> `externally_mediated_model_context` and must not be interpreted as proof that no
+> embedded inference occurred.
+
+The test is valuable because it fixes the boundary of the claim. It does not detect false
+declarations, and nothing in this benchmark claims that it does.

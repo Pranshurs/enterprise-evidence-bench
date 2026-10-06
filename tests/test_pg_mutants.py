@@ -196,3 +196,39 @@ def test_dropping_force_rls_is_caught_by_hardening(pg_dsn: str, instance_dir: Pa
 # Equivalent mutant, not killable on this policy and therefore not counted:
 # - eq_param "IS NOT DISTINCT FROM" instead of "=": every parameterised assignment has a
 #   non-null parameter (enforced by validate_principals), so NULL = NULL never arises.
+
+
+# ---------------------------------------------------------------- build-gate extensions
+def _unlog_one_login(stmt: str) -> bool:
+    return not ("ALTER ROLE" in stmt and "_p_cm_met" in stmt and "log_statement" in stmt)
+
+
+def _narrow_service(stmt: str) -> str:
+    if "service__select" in stmt and '"suppliers"' in stmt:
+        return stmt.replace("USING (TRUE)", "USING (category_id = 'CAT-MET')")
+    return stmt
+
+
+def _drop_twin_grant(stmt: str) -> bool:
+    return not (stmt.startswith("GRANT ") and stmt.endswith('"_v_cm_met"')
+                or (stmt.startswith("GRANT ") and "_g_category_manager" in stmt
+                    and "_v_cm_met" in stmt))
+
+
+@pytest.mark.parametrize("name,pred,rewrite,field", [
+    ("sut_login_not_logged", _unlog_one_login, None, "hardening"),
+    ("service_narrowed", None, _narrow_service, "service_problems"),
+    ("twin_missing_role", _drop_twin_grant, None, "twin_disagreements"),
+])
+def test_gate_extensions_detect(name: str, pred: Any, rewrite: Any, field: str, pg_dsn: str,
+                                instance_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sqlgen, "security_sql", _filter_security(
+        pred or (lambda s: True), rewrite or (lambda s: s)))
+    ns = unique_ns("mutgate")
+    build_database(pg_dsn, instance_dir, ns)
+    try:
+        result = agreement.check(pg_dsn, instance_dir, ns)
+    finally:
+        drop(pg_dsn, ns)
+    assert getattr(result, field), f"gate mutant {name} survived"
+    assert not result.ok

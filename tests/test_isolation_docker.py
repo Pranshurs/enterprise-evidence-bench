@@ -141,11 +141,13 @@ def test_in_process_inference_cannot_be_observed(scanner: ExposureScanner, table
 
 def test_false_gateway_only_declaration_is_an_undetectable_limitation(
         scanner: ExposureScanner, tables: Rows) -> None:
-    """The same in-process SUT *falsely* declares gateway_only. The harness has no evidence
-    to the contrary: the verdict is OBSERVED/0, but only within observation_scope
-    (externally mediated model context), and the restricted context it consumed locally
-    is provably absent from everything the harness recorded. This is the stated limit of
-    the observation boundary, not a coverage claim."""
+    """The same in-process SUT *falsely* declares gateway_only.
+
+    This test does NOT detect the false declaration; it demonstrates that it cannot be
+    detected. An undeclared in-process inference path evades the observation boundary:
+    the verdict is OBSERVED/0 for externally_mediated_model_context, while the restricted
+    context consumed locally is absent from everything the harness recorded. OBSERVED must
+    not be read as proof that no embedded inference occurred."""
     leak = _leak(tables)
     run, reply, wd = _run("local", True, leak, "local-lying", declare="gateway_only")
     try:

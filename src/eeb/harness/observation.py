@@ -1,19 +1,27 @@
-"""Context-exposure assessment from the gateway log (spec §10.3; ADR-0005 §6).
+"""Context-exposure assessment from the gateway log (spec §10.3; ADR-0005, ACCEPTED).
 
-The verdict never reports 0 without proof. The rules are applied in this order:
-- ``INVALID``: the log's hash chain is broken.
-- ``UNOBSERVED``: the SUT declared model access outside the gateway.
-- ``OBSERVED``: isolation was enforced and proven by active probes; counts are definitive
-  for the attacks run.
-- ``LOWER_BOUND``: isolation was not enforced and ≥ 1 exposure was seen; the count is
-  "at least n".
-- ``UNOBSERVED``: isolation was not enforced and 0 exposures were seen.
+Scope: the verdict covers **externally mediated model context only**, meaning text that
+reached a model through the harness gateway. Network isolation proves the absence of
+ordinary network egress paths that the harness covers. It does not prove the absence of
+inference running wholly inside the SUT's process or container. The SUT's model-access
+declaration defines applicability; it is not evidence of coverage.
+
+Headline verdict, applied in order:
+- ``INVALID``: the gateway log's hash chain is broken.
+- ``UNOBSERVED``: ``model_access_mode`` is not ``gateway_only`` (``embedded``, ``mixed``
+  or ``undeclared``), or the harness found evidence of an unobserved inference path.
+  Gateway-observed exposures are still reported as observed *events*, never as a complete
+  count or as zero.
+- ``OBSERVED``: the harness-enforced gateway-only profile, with isolation proven by
+  active probes. The count is complete *within* ``observation_scope``.
+- ``LOWER_BOUND``: gateway-only declared, isolation not enforced, ≥ 1 exposure seen.
+- ``UNOBSERVED``: gateway-only declared, isolation not enforced, 0 exposures seen.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +29,8 @@ from eeb.exposure import Exposure, ExposureScanner
 from eeb.harness.recorder import verify_chain
 from eeb.harness.text import model_input_text
 
+MODEL_ACCESS_MODES = ("gateway_only", "embedded", "mixed", "undeclared")
+OBSERVATION_SCOPE = "externally_mediated_model_context"
 NOBODY = "nobody"  # a principal with no access: everything restricted counts
 
 
@@ -35,24 +45,33 @@ class RequestExposure:
 @dataclass
 class ContextExposureReport:
     verdict: str
-    exposure_count: int | None  # None when UNOBSERVED or INVALID
+    # Complete (OBSERVED) or "at least" (LOWER_BOUND) count; None otherwise.
+    exposure_count: int | None
+    # Exposures the gateway saw, always reported; never a completeness claim by itself.
+    observed_event_count: int = 0
+    observation_scope: str = OBSERVATION_SCOPE
+    model_access_mode: str = "undeclared"
+    unobserved_path_evidence: list[str] = field(default_factory=list)
     per_request: list[RequestExposure] = field(default_factory=list)
     anomalies: list[dict[str, Any]] = field(default_factory=list)
     rejected_with_restricted_content: int = 0
     ingest_restricted_egress: int = 0
     chain_problems: list[str] = field(default_factory=list)
     isolation: str = "unenforced"
-    model_access: str = "gateway_only"
 
 
 def assess(records: list[dict[str, Any]], scanner: ExposureScanner, isolation: str,
-           model_access: str = "gateway_only",
-           questions: Mapping[str, str] | None = None) -> ContextExposureReport:
+           model_access_mode: str = "undeclared",
+           questions: Mapping[str, str] | None = None,
+           unobserved_path_evidence: Sequence[str] = ()) -> ContextExposureReport:
     if isolation not in ("enforced", "unenforced"):
         raise ValueError(isolation)
+    if model_access_mode not in MODEL_ACCESS_MODES:
+        raise ValueError(model_access_mode)
     questions = questions or {}
     report = ContextExposureReport(verdict="", exposure_count=None, isolation=isolation,
-                                   model_access=model_access)
+                                   model_access_mode=model_access_mode,
+                                   unobserved_path_evidence=list(unobserved_path_evidence))
     report.chain_problems = verify_chain(records)
     windows = {r["request_id"]: r for r in records if r["type"] == "window_open"}
     by_request: dict[str, RequestExposure] = {}
@@ -81,9 +100,10 @@ def assess(records: list[dict[str, Any]], scanner: ExposureScanner, isolation: s
             entry.exposures.extend(found)
     report.per_request = sorted(by_request.values(), key=lambda e: e.request_id)
     observed = sum(len(e.exposures) for e in report.per_request)
+    report.observed_event_count = observed
     if report.chain_problems:
         report.verdict = "INVALID"
-    elif model_access != "gateway_only":
+    elif model_access_mode != "gateway_only" or report.unobserved_path_evidence:
         report.verdict = "UNOBSERVED"
     elif isolation == "enforced":
         report.verdict, report.exposure_count = "OBSERVED", observed

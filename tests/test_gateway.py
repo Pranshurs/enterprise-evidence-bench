@@ -19,6 +19,7 @@ from eeb.harness.upstreams import OpenAICompatibleUpstream, ScriptedUpstream
 from eeb.policy.oracle import Oracle
 
 Rows = dict[str, list[dict[str, Any]]]
+GW = "gateway_only"
 
 
 @pytest.fixture(scope="module")
@@ -169,12 +170,12 @@ def test_leak_through_gateway_is_observed(gw: Gateway, scanner: ExposureScanner,
     rid = _open(gw)
     call(gw, f"/r/{rid}/v1/chat/completions", chat(_leak(tables)), {"x-bench-request-id": rid})
     recs = read_log(gw.recorder.path)
-    enforced = assess(recs, scanner, "enforced")
+    enforced = assess(recs, scanner, "enforced", GW)
     # exposure_count counts distinct leaked tokens (full name, coined word, identifier)
     kinds = {e.kind for r in enforced.per_request for e in r.exposures}
     assert enforced.verdict == "OBSERVED" and kinds == {"name", "identifier"}
     assert enforced.exposure_count and enforced.exposure_count >= 2
-    unenforced = assess(recs, scanner, "unenforced")
+    unenforced = assess(recs, scanner, "unenforced", GW)
     assert unenforced.verdict == "LOWER_BOUND"
     assert unenforced.exposure_count == enforced.exposure_count
 
@@ -185,7 +186,7 @@ def test_leak_hidden_in_tool_definitions_is_observed(gw: Gateway, scanner: Expos
     body = chat("innocent", tools=[{"type": "function", "function": {
         "name": "lookup", "description": _leak(tables), "parameters": {"type": "object"}}}])
     call(gw, f"/r/{rid}/v1/chat/completions", body, {"x-bench-request-id": rid})
-    rep = assess(read_log(gw.recorder.path), scanner, "enforced")
+    rep = assess(read_log(gw.recorder.path), scanner, "enforced", GW)
     assert rep.exposure_count and rep.exposure_count > 0
 
 
@@ -195,9 +196,9 @@ def test_clean_run_without_enforced_isolation_is_never_zero(gw: Gateway,
     call(gw, f"/r/{rid}/v1/chat/completions", chat("nothing restricted"),
          {"x-bench-request-id": rid})
     recs = read_log(gw.recorder.path)
-    rep = assess(recs, scanner, "unenforced")
+    rep = assess(recs, scanner, "unenforced", GW)
     assert rep.verdict == "UNOBSERVED" and rep.exposure_count is None
-    assert assess(recs, scanner, "enforced").exposure_count == 0
+    assert assess(recs, scanner, "enforced", GW).exposure_count == 0
 
 
 def test_partial_bypass_without_isolation_is_not_reported_as_clean(
@@ -207,15 +208,14 @@ def test_partial_bypass_without_isolation_is_not_reported_as_clean(
     rid = _open(gw)
     call(gw, f"/r/{rid}/v1/chat/completions", chat("clean part"), {"x-bench-request-id": rid})
     _bypassed = chat(_leak(tables))  # sent directly to a provider: invisible to the gateway
-    rep = assess(read_log(gw.recorder.path), scanner, "unenforced")
+    rep = assess(read_log(gw.recorder.path), scanner, "unenforced", GW)
     assert rep.verdict == "UNOBSERVED"
 
 
 def test_declared_local_model_access_is_unobserved(gw: Gateway, scanner: ExposureScanner) -> None:
     rid = _open(gw)
     call(gw, f"/r/{rid}/v1/chat/completions", chat("x"), {"x-bench-request-id": rid})
-    rep = assess(read_log(gw.recorder.path), scanner, "enforced",
-                 model_access="includes_local_models")
+    rep = assess(read_log(gw.recorder.path), scanner, "enforced", "embedded")
     assert rep.verdict == "UNOBSERVED" and rep.exposure_count is None
 
 
@@ -225,7 +225,7 @@ def test_question_text_is_not_an_exposure(gw: Gateway, scanner: ExposureScanner,
     q = f"How is {s['name']} doing?"
     rid = _open(gw, q=q)
     call(gw, f"/r/{rid}/v1/chat/completions", chat(q), {"x-bench-request-id": rid})
-    rep = assess(read_log(gw.recorder.path), scanner, "enforced", questions={rid: q})
+    rep = assess(read_log(gw.recorder.path), scanner, "enforced", GW, questions={rid: q})
     assert rep.exposure_count == 0
 
 
@@ -237,7 +237,7 @@ def test_tampered_log_is_invalid(gw: Gateway, scanner: ExposureScanner, tables: 
     for x in scrubbed:
         if x["type"] == "model_call":
             x["body_text"] = json.dumps(chat("scrubbed"))
-    rep = assess(scrubbed, scanner, "enforced")
+    rep = assess(scrubbed, scanner, "enforced", GW)
     assert rep.verdict == "INVALID" and rep.exposure_count is None
 
 
@@ -247,5 +247,40 @@ def test_rejected_calls_with_restricted_content_are_counted(gw: Gateway,
     rid = _open(gw)
     call(gw, f"/r/{new_request_id()}/v1/chat/completions", chat(_leak(tables)),
          {"x-bench-request-id": rid})
-    rep = assess(read_log(gw.recorder.path), scanner, "enforced")
+    rep = assess(read_log(gw.recorder.path), scanner, "enforced", GW)
     assert rep.rejected_with_restricted_content == 1 and rep.exposure_count == 0
+
+
+# ---------------------------------------------------------------- ADR-0005 scope rules
+@pytest.mark.parametrize("mode", ["embedded", "mixed", "undeclared"])
+def test_non_gateway_modes_never_get_a_complete_count(mode: str, gw: Gateway,
+                                                      scanner: ExposureScanner,
+                                                      tables: Rows) -> None:
+    rid = _open(gw)
+    call(gw, f"/r/{rid}/v1/chat/completions", chat(_leak(tables)), {"x-bench-request-id": rid})
+    rep = assess(read_log(gw.recorder.path), scanner, "enforced", mode)
+    assert rep.verdict == "UNOBSERVED" and rep.exposure_count is None
+    assert rep.observed_event_count >= 2  # still reported as observed events
+    assert rep.observation_scope == "externally_mediated_model_context"
+    assert rep.model_access_mode == mode
+
+
+def test_default_mode_is_undeclared(gw: Gateway, scanner: ExposureScanner) -> None:
+    rid = _open(gw)
+    call(gw, f"/r/{rid}/v1/chat/completions", chat("x"), {"x-bench-request-id": rid})
+    rep = assess(read_log(gw.recorder.path), scanner, "enforced")
+    assert rep.model_access_mode == "undeclared" and rep.verdict == "UNOBSERVED"
+
+
+def test_evidence_of_unobserved_path_forces_unobserved(gw: Gateway,
+                                                       scanner: ExposureScanner) -> None:
+    rid = _open(gw)
+    call(gw, f"/r/{rid}/v1/chat/completions", chat("x"), {"x-bench-request-id": rid})
+    rep = assess(read_log(gw.recorder.path), scanner, "enforced", GW,
+                 unobserved_path_evidence=["model weights found in image layer"])
+    assert rep.verdict == "UNOBSERVED" and rep.exposure_count is None
+
+
+def test_unknown_mode_is_rejected(gw: Gateway, scanner: ExposureScanner) -> None:
+    with pytest.raises(ValueError):
+        assess([], scanner, "enforced", "gateway-ish")

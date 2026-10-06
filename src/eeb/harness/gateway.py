@@ -96,6 +96,11 @@ class Gateway:
                                  data.get("principal_id"), data.get("question"))
             elif action == "close":
                 self.close_window(data["request_id"])
+            elif action == "get":
+                async with httpx.AsyncClient(timeout=30) as client:
+                    r = await client.get(data["url"])
+                return JSONResponse({"status": r.status_code, "body": r.json()
+                                     if r.content else None})
             elif action == "ask":
                 # Harness-to-SUT relay: in isolated runs the SUT is reachable only on the
                 # internal network, which the gateway shares; the harness is outside it.

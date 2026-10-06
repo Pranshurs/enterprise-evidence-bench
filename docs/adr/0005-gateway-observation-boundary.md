@@ -1,7 +1,7 @@
 # ADR-0005: Recording gateway and observation boundary (spec §9.1, §10.3)
 
-Status: accepted for implementation (Phase 2b), except the in-process-model item, which is
-**proposed for a design decision**.
+**Status: ACCEPTED (design decision 2026-10-06), with the scope wording in "In-process models"
+below.**
 
 ## Problem
 
@@ -53,9 +53,9 @@ evidence. That requires answering four questions for each benchmark request:
      are definitive for the attack families run.
    - `LOWER_BOUND`: isolation is not enforced, but the gateway still saw ≥ 1 exposure.
      The count is reported as "at least n".
-   - `UNOBSERVED`: isolation is not enforced and the gateway saw 0 exposures, **or** the
-     SUT declared any model access that does not go through the gateway. **Never reported
-     as 0.**
+   - `UNOBSERVED`: isolation is not enforced and the gateway saw 0 exposures, **or**
+     `model_access_mode` is not `gateway_only`, **or** there is evidence of an unobserved
+     inference path. **Never reported as 0.** Observed events are still reported.
 7. **Enforced isolation (Docker).**
    - The SUT container runs on an `internal: true` network whose only other members are
      the gateway (data port) and the benchmark database.
@@ -66,15 +66,35 @@ evidence. That requires answering four questions for each benchmark request:
    - Only a run whose pre- and post-probes both pass is `isolation: enforced`.
    - The gateway's control plane requires a per-run secret held only by the harness.
 
-## Proposed design decision: in-process models
+## In-process models (design decision)
 
-Egress control cannot observe a SUT that runs a model **inside its own container**, for
-example an embedded local LLM. Such traffic never crosses the network.
+> Model-context exposure is only eligible for an OBSERVED verdict when the run uses the
+> harness-enforced gateway-only execution profile and the SUT declares that all model
+> inference is gateway-mediated. The declaration defines applicability; it does not
+> independently establish coverage.
+>
+> If the SUT declares embedded/in-process inference, does not declare its model-access
+> mode, or the harness detects evidence of an unobserved inference path, the headline
+> context-exposure verdict is UNOBSERVED. Any gateway-observed exposures may still be
+> reported as observed events, but they must not be presented as a complete exposure count
+> or as zero leakage.
+>
+> Network isolation proves only the absence of ordinary network egress paths covered by
+> the harness. It does not prove the absence of inference occurring wholly inside the SUT
+> process/container.
 
-Proposed handling:
-- The SUT setup declares `model_access` (`gateway_only` | `includes_local_models`). Any
-  declaration other than `gateway_only` makes context exposure `UNOBSERVED`.
-- Undeclared in-process inference is stated as a **limitation of the observation
-  boundary**, not claimed as covered.
+Every result carries two protocol fields:
+- `model_access_mode` ∈ `gateway_only | embedded | mixed | undeclared`. The default is
+  `undeclared`, and missing or unknown declarations map to it.
+- `observation_scope` = `externally_mediated_model_context`.
 
-This changes what a review may attack, so it requires a recorded design decision before the scorer freezes.
+`OBSERVED` therefore means "complete within the externally mediated model context under
+enforced isolation". It does not mean every token any model consumed.
+
+**Demonstrated, not only documented** (`tests/test_isolation_docker.py`):
+- *Honest declarations.* A SUT feeds restricted context to an in-process "model" and sends
+  only the question through the gateway. Declared `mixed`, `embedded` or undeclared, it is
+  UNOBSERVED in every case.
+- *False declaration.* The same SUT falsely declaring `gateway_only` gets OBSERVED/0 within
+  scope. The test proves that the locally consumed restricted tokens are absent from
+  everything the harness recorded. This is the stated, undetectable limit of the boundary.

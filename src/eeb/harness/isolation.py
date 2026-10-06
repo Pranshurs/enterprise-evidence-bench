@@ -117,6 +117,14 @@ class IsolatedRun:
         r.raise_for_status()
         return r.json()
 
+    def declared_model_access(self) -> str:
+        """The SUT's declaration (scope, not evidence). Missing or unknown → undeclared."""
+        from eeb.harness.observation import MODEL_ACCESS_MODES
+
+        body = self.control("get", {"url": "http://sut:8000/v1/setup"}).get("body") or {}
+        mode = body.get("model_access_mode")
+        return mode if mode in MODEL_ACCESS_MODES else "undeclared"
+
     def ask(self, request_id: str, principal_id: str, question: str,
             extra: dict[str, Any] | None = None) -> Any:
         self.control("open", {"request_id": request_id, "principal_id": principal_id,

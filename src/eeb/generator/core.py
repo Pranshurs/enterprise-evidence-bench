@@ -23,13 +23,14 @@ class Scale:
     pos_per_month: int
     max_lines: int
     planted_suppliers: int  # per scenario kind
+    incident_draws_per_month: int  # each draw records an ordinary incident 1 time in 3
 
 
 SCALES: dict[str, Scale] = {
     "small": Scale(suppliers_per_category=3, items_per_category=4, pos_per_month=24,
-                   max_lines=4, planted_suppliers=1),
+                   max_lines=4, planted_suppliers=1, incident_draws_per_month=1),
     "default": Scale(suppliers_per_category=10, items_per_category=8, pos_per_month=1150,
-                     max_lines=6, planted_suppliers=3),
+                     max_lines=6, planted_suppliers=3, incident_draws_per_month=12),
 }
 
 

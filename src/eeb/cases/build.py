@@ -8,6 +8,9 @@ For each plan slot, in case-id order:
 3. Counterfactual group slots get an X case for a permitted principal and an A case
    (same question, same as-of date) for a principal denied at least one necessary
    evidence unit.
+4. A family (template plus slots) is used once. The two members of a counterfactual group
+   are the only cases that share one, so no quota can be met by asking the same question
+   as several principals.
 
 Rejected candidates are counted by reason in the build report, so validator strictness
 is visible.
@@ -42,6 +45,12 @@ def _rank(seed: int, *parts: Any) -> str:
                                      default=str).encode()).hexdigest()
 
 
+def family_id(t: Template, slots: dict[str, Any]) -> str:
+    """A family is one question: a template with its slots filled. Cases that differ only
+    in who asks belong to the same family."""
+    return _rank(0, "family", t.id, slots)[:16]
+
+
 class CaseBuilder:
     def __init__(self, data: InstanceData, seed: int) -> None:
         self.data = data
@@ -50,6 +59,7 @@ class CaseBuilder:
         self.search = MetricSearch()
         self.rejections: Counter[str] = Counter()
         self.used: set[str] = set()
+        self.families: set[str] = set()
         self._bindings: dict[str, list[dict[str, Any]]] = {}
         self._cursor: Counter[str] = Counter()
         self._cands: dict[str, list[tuple[dict[str, Any], str, Any]]] = {}
@@ -190,13 +200,14 @@ class CaseBuilder:
                 slots, pid, injection = cands[self._cursor[ck]]
                 self._cursor[ck] += 1
                 key = _rank(0, t.id, slots, pid)
-                if key in self.used:
+                fam = family_id(t, slots)
+                if key in self.used or fam in self.families:
                     continue
                 v = self._validated(t, slots, pid, slot["class"], slot["overlays"]["ool"])
                 if v is None:
                     continue
                 self.used.add(key)
-                fam = _rank(0, "family", t.id, slots)[:16]
+                self.families.add(fam)
                 case = self._case(slot, t, slots, pid, v, fam)
                 if injection:
                     case["injection"] = as_jsonable({
@@ -215,6 +226,9 @@ class CaseBuilder:
             while self._cursor[t.id] < len(bindings):
                 slots = bindings[self._cursor[t.id]]
                 self._cursor[t.id] += 1
+                fam = family_id(t, slots)
+                if fam in self.families:
+                    continue
                 global_gold = self._global_gold(t, slots)
                 if global_gold is None:
                     continue
@@ -230,7 +244,7 @@ class CaseBuilder:
                         continue
                     dpid, missing = denied
                     self.used.add(_rank(0, t.id, slots, pid))
-                    fam = _rank(0, "family", t.id, slots)[:16]
+                    self.families.add(fam)
                     x = self._case(permitted_slot, t, slots, pid, v, fam)
                     a_gold: dict[str, Any] = {"expected_outcome": "ABSTAIN", "facts": [],
                               "answer_requirement": [], "required_citations": [],

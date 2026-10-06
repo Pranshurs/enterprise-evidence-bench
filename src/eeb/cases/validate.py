@@ -100,14 +100,25 @@ def sql_resolvable(data: InstanceData, slots: dict[str, Any], f: dict[str, Any],
     return False
 
 
-def doc_resolvable(data: InstanceData, slots: dict[str, Any], f: dict[str, Any],
+def doc_texts(data: InstanceData, slots: dict[str, Any], gold: dict[str, Any]) -> list[str]:
+    """Every document a documents-only reader would consult for this question: those that
+    name the supplier, the contract or any of the supplier's contracts, and every version
+    of each document the gold itself cites."""
+    keys = {str(slots[k]) for k in ("supplier_id", "contract_id") if k in slots}
+    if "supplier_id" in slots:
+        keys |= {c["contract_id"] for c in data.tables["contracts"]
+                 if c["supplier_id"] == slots["supplier_id"]}
+    cited = {f["doc_ref"]["doc_id"] for f in gold["facts"] if f["source"] == "doc"}
+    return [d["rendered"] for (doc_id, _), d in sorted(data.docs.items())
+            if doc_id in cited or any(k in d["rendered"] for k in keys)]
+
+
+def doc_resolvable(data: InstanceData, texts: list[str], f: dict[str, Any],
                    by_id: dict[str, dict[str, Any]]) -> bool:
     if f["source"] == "doc":
         return True
     if f["source"] == "derived":
-        return all(doc_resolvable(data, slots, by_id[i], by_id) for i in f["derived"]["inputs"])
-    keys = [str(slots[k]) for k in ("supplier_id", "contract_id") if k in slots]
-    texts = [d["rendered"] for d in data.docs.values() if any(k in d["rendered"] for k in keys)]
+        return all(doc_resolvable(data, texts, by_id[i], by_id) for i in f["derived"]["inputs"])
     if f["kind"] == "entity_set":
         ids = f["value"]
         return bool(ids) and all(any(i in d["rendered"] for d in data.docs.values()) for i in ids)
@@ -124,8 +135,9 @@ def doc_resolvable(data: InstanceData, slots: dict[str, Any], f: dict[str, Any],
 def necessity(data: InstanceData, slots: dict[str, Any], gold: dict[str, Any]) -> dict[str, Any]:
     by_id = {f["fact_id"]: f for f in gold["facts"]}
     leaves = [f for f in _closure(gold) if f["source"] != "derived"]
+    texts = doc_texts(data, slots, gold)
     sql_missing = [f["fact_id"] for f in leaves if not sql_resolvable(data, slots, f, by_id)]
-    doc_missing = [f["fact_id"] for f in leaves if not doc_resolvable(data, slots, f, by_id)]
+    doc_missing = [f["fact_id"] for f in leaves if not doc_resolvable(data, texts, f, by_id)]
     return {"sql_alone_sufficient": not sql_missing, "docs_alone_sufficient": not doc_missing,
             "sql_alone_lacks": sorted(sql_missing), "docs_alone_lack": sorted(doc_missing)}
 

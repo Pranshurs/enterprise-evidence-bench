@@ -615,16 +615,17 @@ class DomainBuilder:
         sups = [r["supplier_id"] for r in self.t["suppliers"]]
         n = 0
         for m in month_starts(self.cfg.start, self.cfg.end):
-            if s.chance(1, 3):
-                n += 1
-                self.w.incidents.append({
-                    "incident_id": f"INC-{n:04d}", "supplier_id": s.choice(sups),
-                    "bu_id": s.choice([b[0] for b in BUSINESS_UNITS]),
-                    "incident_date": m + dt.timedelta(days=s.below(28)),
-                    "kind": s.choice(("quality", "delivery", "documentation")),
-                    "severity": s.choice(("low", "medium", "high")), "force_majeure": False,
-                    "planted": None,
-                })
+            for _ in range(self.cfg.sizes.incident_draws_per_month):
+                if s.chance(1, 3):
+                    n += 1
+                    self.w.incidents.append({
+                        "incident_id": f"INC-{n:04d}", "supplier_id": s.choice(sups),
+                        "bu_id": s.choice([b[0] for b in BUSINESS_UNITS]),
+                        "incident_date": m + dt.timedelta(days=s.below(28)),
+                        "kind": s.choice(("quality", "delivery", "documentation")),
+                        "severity": s.choice(("low", "medium", "high")), "force_majeure": False,
+                        "planted": None,
+                    })
         # Planted conflicts: some incident reports state a different force-majeure
         # determination than the incident register.
         sc = self.s("conflicts/incidents")

@@ -8,3 +8,4 @@ build/
 dist/
 instances/
 *.partial/
+.runs/

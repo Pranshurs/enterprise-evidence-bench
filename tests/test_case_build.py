@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from eeb.cases import dbcheck
-from eeb.cases.build import CaseBuilder, family_id
+from eeb.cases.build import PROBE_STRATA, CaseBuilder, family_id, probe_slots, probe_stratum
 from eeb.cases.templates import TEMPLATES, Template
 from eeb.cases.validate import (
     metric_layer_membership,
@@ -34,6 +34,8 @@ from tests.conftest import SEED, unique_ns
 
 C_SLOTS_ON_SMALL = 8
 SLOTS_ON_SMALL = {"C": C_SLOTS_ON_SMALL, "T": 25}
+# The small fixture holds few partially-visible answers; the corpus gate checks the real share.
+PROBE_SHARE_ON_SMALL = (1, 60)
 BY_ID: dict[str, Template] = {t.id: t for t in TEMPLATES}
 
 
@@ -53,12 +55,12 @@ def plan(instance_dir: Path) -> list[dict[str, Any]]:
 
 @pytest.fixture(scope="module")
 def cases(data: InstanceData, plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return CaseBuilder(data, SEED).build(plan)
+    return CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL).build(plan)
 
 
 def _first_valid(data: InstanceData, template_id: str, cls: str, want_ool: bool | None
                  ) -> tuple[CaseBuilder, Template, dict[str, Any], str, dict[str, Any]]:
-    b = CaseBuilder(data, SEED)
+    b = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
     t = BY_ID[template_id]
     for slots, pid, _ in b.candidates(t, False):
         v = b._validated(t, slots, pid, cls, want_ool)
@@ -78,7 +80,7 @@ def test_sub_plan_is_filled_slot_for_slot(cases: list[dict[str, Any]],
 
 def test_build_is_deterministic(data: InstanceData, plan: list[dict[str, Any]],
                                 cases: list[dict[str, Any]]) -> None:
-    assert CaseBuilder(data, SEED).build(plan) == cases
+    assert CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL).build(plan) == cases
 
 
 # ------------------------------------------------------------------ family dedup
@@ -103,7 +105,7 @@ def test_red_arm_without_the_family_rule_a_question_is_reused(
             return None
 
     def families(forget: bool) -> list[str]:
-        b = CaseBuilder(data, SEED)
+        b = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
         if forget:
             b.families = Forgetful()
         return [b.fill_single(s, i)["family_id"] for i, s in enumerate(slots_c)]
@@ -164,7 +166,7 @@ def test_denied_group_member_is_denied_a_necessary_unit(data: InstanceData,
         assert x["expected_outcome"] == "ANSWER" and x["restricted_probe"] is None
         # Re-derive the denial from the instance, not from the recorded reason.
         t = BY_ID[x["template_id"]]
-        b = CaseBuilder(data, SEED)
+        b = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
         full = b._global_gold(t, x["slots"])
         assert full is not None
         unreadable = missing_evidence(full, data.view(a["principal_id"]))
@@ -271,7 +273,7 @@ def test_restricted_probe_records_only_values_that_differ() -> None:
 
 def test_restricted_probe_on_a_principal_who_sees_part_of_the_rows(data: InstanceData) -> None:
     """Some principal sees only part of a supplier's invoices; the probe must capture it."""
-    b = CaseBuilder(data, SEED)
+    b = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
     t = BY_ID["S.invoiced_amount"]
     found = 0
     for slots in b.bindings(t):
@@ -385,16 +387,16 @@ def test_red_arm_cited_document_is_searched_when_no_slot_names_it(data: Instance
 def test_red_arm_permitted_group_member_must_see_the_complete_answer(
         data: InstanceData, plan: list[dict[str, Any]]) -> None:
     pair = {s["group_member"]: s for s in plan if s["group_id"] == "G-0001"}
-    honest = CaseBuilder(data, SEED)
+    honest = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
     x, _ = honest.fill_group(pair["permitted"], pair["denied"], 0)
 
-    partial = CaseBuilder(data, SEED)
+    partial = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
     real = partial._validated
     tampered: list[str] = []
 
     def validated(t: Template, slots: dict[str, Any], pid: str, cls: str,
-                  want_ool: bool | None) -> dict[str, Any] | None:
-        v = real(t, slots, pid, cls, want_ool)
+                  want_ool: bool | None, need_probe: bool = False) -> dict[str, Any] | None:
+        v = real(t, slots, pid, cls, want_ool, need_probe)
         if v is not None and not tampered:  # the first acceptable principal sees only part
             tampered.append(pid)
             v["restricted_probe"] = [{"fact_id": "x", "authorized_value": 1,
@@ -411,8 +413,9 @@ def test_red_arm_permitted_group_member_must_see_the_complete_answer(
 def test_red_arm_group_does_not_reuse_a_family(data: InstanceData,
                                                plan: list[dict[str, Any]]) -> None:
     pair = {s["group_member"]: s for s in plan if s["group_id"] == "G-0001"}
-    first, _ = CaseBuilder(data, SEED).fill_group(pair["permitted"], pair["denied"], 0)
-    b = CaseBuilder(data, SEED)
+    first, _ = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL).fill_group(
+        pair["permitted"], pair["denied"], 0)
+    b = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
     b.families.add(first["family_id"])
     again, denied = b.fill_group(pair["permitted"], pair["denied"], 0)
     assert again["family_id"] != first["family_id"]
@@ -433,3 +436,136 @@ def test_red_arm_uncited_contract_document_is_searched(data: InstanceData) -> No
     gold["facts"][0]["value"] = Decimal("73519.42")
     assert necessity(data, slots, gold)["docs_alone_sufficient"] is False
     assert necessity(extended, slots, gold)["docs_alone_sufficient"] is True
+
+
+# ------------------------------------------------------------------ restricted-probe slots
+def _slot(cid: str, split: str, cls: str, *, ool: bool = False, injection: bool = False,
+          group: str | None = None) -> dict[str, Any]:
+    return {"case_id": cid, "split": split, "class": cls, "group_id": group,
+            "group_member": "permitted" if group else None,
+            "overlays": {"injection": injection, "ool": ool}}
+
+
+def test_probe_slots_take_the_share_of_every_split_over_the_strata() -> None:
+    plan = [_slot(f"{sp}-{cls}-{ool}-{i}", sp, cls, ool=ool)
+            for sp in ("dev", "test") for cls in ("S", "X") for ool in (False, True)
+            for i in range(49)]
+    plan += [_slot(f"test-D-{i}", "test", "D") for i in range(100)]
+    chosen = probe_slots(plan, SEED, (1, 10))
+    by_id = {s["case_id"]: s for s in plan}
+    for split, size, tenth in (("dev", 196, 20), ("test", 296, 30)):  # rounded up
+        assert sum(1 for s in plan if s["split"] == split) == size
+        mine = [by_id[c] for c in chosen if by_id[c]["split"] == split]
+        assert len(mine) == tenth
+        strata = Counter(probe_stratum(s) for s in mine)
+        need = len(mine)
+        assert strata["sql"] == need * dict(PROBE_STRATA)["sql"] // 100
+        assert strata["cross_source_out_of_layer"] == (
+            need * dict(PROBE_STRATA)["cross_source_out_of_layer"] // 100)
+        assert sum(strata.values()) == need and None not in strata
+    assert probe_slots(plan, SEED, (1, 10)) == chosen
+    assert probe_slots(plan, SEED + 1, (1, 10)) != chosen
+
+
+def test_probe_slots_exclude_groups_injection_and_other_classes() -> None:
+    assert probe_stratum(_slot("a", "test", "X", group="G-1")) is None
+    assert probe_stratum(_slot("b", "test", "X", injection=True)) is None
+    assert probe_stratum(_slot("c", "test", "S", injection=True)) is None
+    assert probe_stratum(_slot("d", "test", "D")) is None
+    assert probe_stratum(_slot("e", "test", "S")) == "sql"
+    assert probe_stratum(_slot("f", "test", "X", ool=True)) == "cross_source_out_of_layer"
+    assert probe_stratum(_slot("g", "test", "X")) == "cross_source_in_layer"
+
+
+def test_every_probe_slot_is_bound_to_a_probe_case(plan: list[dict[str, Any]],
+                                                   cases: list[dict[str, Any]]) -> None:
+    want = probe_slots(plan, SEED, PROBE_SHARE_ON_SMALL)
+    assert want
+    for c in cases:
+        if c["case_id"] in want:
+            assert c["restricted_probe"], c["case_id"]
+
+
+def test_probe_requirement_is_checked_before_acceptance(data: InstanceData,
+                                                        plan: list[dict[str, Any]]) -> None:
+    """A slot that needs a probe never takes a principal who sees every row; the candidates
+    it passes over stay available to ordinary slots (the probe walk has its own cursor).
+
+    Checked on every template compatible with an S and an X probe slot. A template counts
+    only where some candidate before the probe's is still free afterwards, so a shared
+    cursor would have skipped it; at least one such template must exist."""
+    discriminating = 0
+    for stratum in ("sql", "cross_source_in_layer"):
+        slot = next(s for s in plan if probe_stratum(s) == stratum)
+        for t in CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)._compatible(slot):
+            def builder(t: Template = t) -> CaseBuilder:
+                b = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
+                b._compatible = lambda _s: [t]  # type: ignore[method-assign]
+                return b
+
+            fresh = builder()
+            try:
+                probed = fresh.fill_single(slot, 0, probe=True)
+            except RuntimeError:
+                continue  # no partially-sighted principal for this template on the fixture
+            assert probed["restricted_probe"]
+            after = fresh.fill_single(slot, 0, probe=False)
+            ref = builder()  # an ordinary walk from the start, probe's family taken
+            ref.families.add(probed["family_id"])
+            expected = ref.fill_single(slot, 0, probe=False)
+            assert (after["family_id"], after["principal_id"]) == (
+                expected["family_id"], expected["principal_id"]), t.id
+            cands = [(family_id(t, sl), pid) for sl, pid, _ in fresh.candidates(t, False)]
+            if cands.index((expected["family_id"], expected["principal_id"])) < cands.index(
+                    (probed["family_id"], probed["principal_id"])):
+                discriminating += 1
+    assert discriminating >= 1
+
+
+# ------------------------------------------------------------------ template spread
+def test_least_used_template_is_tried_first(data: InstanceData) -> None:
+    b = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
+    ts = [t for t in TEMPLATES if t.cls == "X"][:4]
+    assert [t.id for t in b._least_used_first(ts, 0)] == [t.id for t in ts]
+    assert [t.id for t in b._least_used_first(ts, 1)] == [t.id for t in ts[1:] + ts[:1]]
+    b.template_use[ts[1].id] = 2
+    b.template_use[ts[2].id] = 1
+    assert [t.id for t in b._least_used_first(ts, 1)] == [ts[3].id, ts[0].id, ts[2].id,
+                                                          ts[1].id]
+
+
+def test_template_use_counts_every_bound_family(cases: list[dict[str, Any]], data: InstanceData,
+                                              plan: list[dict[str, Any]]) -> None:
+    b = CaseBuilder(data, SEED, PROBE_SHARE_ON_SMALL)
+    built = b.build(plan)
+    # One count per question: the two members of a counterfactual pair count once.
+    assert b.template_use == Counter(
+        t for t in {c["family_id"]: c["template_id"] for c in built}.values())
+
+
+# ------------------------------------------------------------------ parameterised SQL facts
+def test_red_arm_sql_fact_parameterised_by_a_document_needs_the_document(
+        data: InstanceData) -> None:
+    """The SQL fact takes its threshold from a document: SQL alone cannot compute it. With
+    the dependency removed, the same case passes as SQL-answerable and would be rejected
+    as cross-source."""
+    _, _, slots, _, v = _first_valid(data, "X.exception_required_value", "X", False)
+    gold = v["gold"]
+    assert necessity(data, slots, gold)["sql_alone_sufficient"] is False
+    stripped = copy.deepcopy(gold)
+    for f in stripped["facts"]:
+        f.pop("depends_on", None)
+    assert necessity(data, slots, stripped)["sql_alone_sufficient"] is True
+
+
+# ------------------------------------------------------------------ row index
+def test_row_index_is_per_principal_and_complete(data: InstanceData) -> None:
+    full = data.view("fin_ctrl")
+    part = data.view("buyer_in")
+    for v in (full, part):
+        idx = v.by("invoices", "supplier_id")
+        assert sorted(r["invoice_id"] for rows in idx.values() for r in rows) == sorted(
+            r["invoice_id"] for r in v.rows("invoices"))
+        assert all(r["supplier_id"] == k for k, rows in idx.items() for r in rows)
+    assert sum(map(len, part.by("invoices", "supplier_id").values())) < sum(
+        map(len, full.by("invoices", "supplier_id").values()))

@@ -29,6 +29,8 @@ class InstanceData:
     oracle: Oracle | None = None
     _visible: dict[tuple[str, str], tuple[dict[str, Any], ...]] = field(
         default_factory=dict, repr=False)
+    _by: dict[tuple[str, str, str], dict[Any, list[dict[str, Any]]]] = field(
+        default_factory=dict, repr=False)
 
     @classmethod
     def load(cls, root: Path) -> InstanceData:
@@ -132,6 +134,16 @@ class PrincipalView:
                 self.data._visible[key] = tuple(
                     r for r in self.data.tables[table] if pk_key(table, r) in vis)
         return list(self.data._visible[key])
+
+    def by(self, table: str, column: str) -> dict[Any, list[dict[str, Any]]]:
+        """Visible rows of ``table`` grouped by ``column``, in table order (built once)."""
+        key = (self.pid, table, column)
+        if key not in self.data._by:
+            idx: dict[Any, list[dict[str, Any]]] = {}
+            for r in self.rows(table):
+                idx.setdefault(r[column], []).append(r)
+            self.data._by[key] = idx
+        return self.data._by[key]
 
     def chunk_visible(self, chunk_id: str | None) -> bool:
         return chunk_id is not None and (chunk_id,) in self.oracle.visible_rows(

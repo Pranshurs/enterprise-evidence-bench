@@ -17,6 +17,7 @@ rejected, and the rejection reason is counted in the build report.
 
 from __future__ import annotations
 
+import bisect
 import datetime as dt
 import itertools
 import re
@@ -27,8 +28,9 @@ from eeb.cases.view import InstanceData, PrincipalView
 from eeb.metrics import layer, reference
 
 SLOT_FILTERS = {"supplier_id": ["supplier_id"], "currency": ["currency"],
-                "item_id": ["item_id"], "po_id": ["po_id"],
-                "quarter": ["invoice_quarter", "order_quarter", "promised_quarter", "quarter"]}
+                "item_id": ["item_id"], "po_id": ["po_id"], "off_contract": ["off_contract"],
+                "quarter": ["invoice_quarter", "order_quarter", "promised_quarter", "quarter"],
+                "quarter_before": ["order_quarter"], "quarter_after": ["order_quarter"]}
 _NUM = re.compile(r"(?<![\d.,])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\d])")
 
 
@@ -67,6 +69,7 @@ def _closure(gold: dict[str, Any]) -> list[dict[str, Any]]:
         out.append(f)
         if f["source"] == "derived":
             stack.extend(f["derived"]["inputs"])
+        stack.extend(f.get("depends_on", []))
     return out
 
 
@@ -159,6 +162,7 @@ class MetricSearch:
         self._subsets: dict[tuple[str, str, tuple[tuple[str, str], ...]],
                             list[dict[str, Any]]] = {}
         self._values: dict[tuple[Any, ...], tuple[Decimal, ...]] = {}
+        self._sorted: dict[tuple[Any, ...], list[Decimal]] = {}
 
     def _view(self, view: PrincipalView, name: str) -> list[dict[str, Any]] | None:
         key = (view.pid, name)
@@ -226,12 +230,24 @@ class MetricSearch:
                           for d in dims if d in m["filters"]]
             for k in range(len(applicable) + 1):
                 for fsub in itertools.combinations(applicable, k):
-                    for g in range(0, 3):
-                        for gb in itertools.combinations(m["dimensions"], g):
-                            if any(abs(n - want) <= tol for n in
-                                   self._query_values(view.pid, metric, m, rows, fsub, gb)):
-                                return True
+                    values = self._filter_values(view.pid, metric, m, rows, fsub)
+                    # Some value n with |n - want| <= tol, i.e. want - tol <= n <= want + tol.
+                    i = bisect.bisect_left(values, want - tol)
+                    if i < len(values) and values[i] <= want + tol:
+                        return True
         return False
+
+    def _filter_values(self, pid: str, metric: str, m: dict[str, Any],
+                       rows: list[dict[str, Any]], fsub: tuple[tuple[str, str], ...]
+                       ) -> list[Decimal]:
+        """Sorted results of every grouping (up to two declared dimensions) of one metric
+        under one filter subset."""
+        key = (pid, metric, fsub)
+        if key not in self._sorted:
+            self._sorted[key] = sorted(
+                n for g in range(0, 3) for gb in itertools.combinations(m["dimensions"], g)
+                for n in self._query_values(pid, metric, m, rows, fsub, gb))
+        return self._sorted[key]
 
 
 def metric_layer_membership(search: MetricSearch, view: PrincipalView, slots: dict[str, Any],

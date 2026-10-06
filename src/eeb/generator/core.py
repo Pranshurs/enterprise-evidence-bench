@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
-GENERATOR_VERSION = "2a.3"
+GENERATOR_VERSION = "2a.4"
 COMPANY = "ExampleCo"  # fictional
 SYNTHETIC_MARKER = (
     "SYNTHETIC DATA. ExampleCo and every supplier, person, contract and figure in this "

@@ -1,0 +1,9 @@
+N13 "off_contract filter missing" re-run after adding
+test_red_arm_off_contract_slot_filters_the_search (tests/test_case_validators.py).
+
+baseline (unmutated):  pytest tests/test_case_validators.py -k off_contract -> 1 passed
+mutant applied:        "po_id": ["po_id"], "off_contract": ["off_contract"],  ->  "po_id": ["po_id"],
+                       pytest tests/test_case_validators.py -k off_contract -> 1 failed
+restored:              src/eeb/cases/validate.py byte-identical to the pre-campaign copy (cmp)
+
+The full case suites were then re-run green on Python 3.11-3.14 (398 passed each).

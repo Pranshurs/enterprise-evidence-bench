@@ -26,15 +26,19 @@ PRINCIPALS = ["cm_met", "cm_elc", "cm_multi", "cm_moved", "buyer_in", "buyer_eu"
 
 
 # ------------------------------------------------------------------ exhaustive reference
-def exhaustive_values(view: PrincipalView, slots: dict[str, Any]) -> Counter[tuple[Any, ...]]:
+def exhaustive_values(view: PrincipalView, slots: dict[str, Any],
+                      slot_filters: dict[str, list[str]] | None = None
+                      ) -> Counter[tuple[Any, ...]]:
     """Every (metric, filters, grouping, value) the search may compare against, computed
-    by scanning the whole view for each query."""
+    by scanning the whole view for each query. ``slot_filters`` replaces the slot-to-filter
+    mapping when a test states it independently."""
     out: Counter[tuple[Any, ...]] = Counter()
+    mapping = SLOT_FILTERS if slot_filters is None else slot_filters
     for metric, m in layer.catalog()["metrics"].items():
         rows = reference.view_rows(view, m["view"])
         if rows is None:
             continue
-        applicable = [(d, str(slots[s])) for s, dims in SLOT_FILTERS.items() if s in slots
+        applicable = [(d, str(slots[s])) for s, dims in mapping.items() if s in slots
                       for d in dims if d in m["filters"]]
         for k in range(len(applicable) + 1):
             for fsub in itertools.combinations(applicable, k):
@@ -152,3 +156,26 @@ def test_search_results_do_not_depend_on_call_order(data: InstanceData) -> None:
     b = [searched_values(backward, view, s) for s in reversed(sets)]
     assert a == list(reversed(b))
     assert a == [searched_values(forward, view, s) for s in sets]  # warm cache, same answers
+
+
+def test_red_arm_off_contract_slot_filters_the_search(data: InstanceData) -> None:
+    """An ``off_contract`` slot must narrow the governed queries the search tries. Some
+    value is reachable only with that filter plus two groupings (grouping by
+    ``off_contract`` instead would need a third dimension); the search must find it.
+    The slot-to-filter mapping is written out here, not taken from the code under test."""
+    with_filter = {"supplier_id": ["supplier_id"], "quarter": ["order_quarter"],
+                   "off_contract": ["off_contract"]}
+    without = {k: v for k, v in with_filter.items() if k != "off_contract"}
+    ctx = Ctx.build(data)
+    view = data.view("fin_ctrl")
+    for sid in ctx.active_suppliers():
+        for q in ctx.quarters:
+            slots = {"supplier_id": sid, "quarter": q, "off_contract": "yes"}
+            reach = {k[3] for k in exhaustive_values(view, slots, with_filter)}
+            base = sorted({k[3] for k in exhaustive_values(view, slots, without)})
+            only = sorted(v for v in reach
+                          if not any(abs(v - b) <= Decimal("0.01") for b in base))
+            if only:
+                assert MetricSearch().reconstructible(view, slots, only[0], "0.01")
+                return
+    raise AssertionError("no value is reachable only through the off_contract filter")

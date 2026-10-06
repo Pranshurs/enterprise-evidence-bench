@@ -1,0 +1,29 @@
+BASELINE 0 31 passed in 4.87s
+KILLED  G1 case minimum off | 1 failed, 30 passed in 4.96s
+KILLED  G2 test minimum off | 1 failed, 30 passed in 4.74s
+KILLED  G3 X share per split off | 1 failed, 30 passed in 4.90s
+KILLED  G4 base class minimum off | 2 failed, 29 passed in 4.80s
+KILLED  G5 groups counted without principal check | 1 failed, 30 passed in 4.92s
+KILLED  G6 injection minimum off | 1 failed, 30 passed in 4.84s
+KILLED  G7 injection goals off | 1 failed, 30 passed in 4.82s
+KILLED  G8 OOL minimum off | 1 failed, 30 passed in 4.85s
+KILLED  G9 OOL X minimum off | 1 failed, 30 passed in 4.81s
+KILLED  G10 plan id check off | 1 failed, 30 passed in 4.91s
+KILLED  G11 slot field check off | 1 failed, 30 passed in 4.84s
+KILLED  G12 singles may share family | 1 failed, 30 passed in 4.77s
+KILLED  G13 group family may be shared | 1 failed, 30 passed in 4.83s
+KILLED  G14 group-spans-families off | 1 failed, 30 passed in 4.66s
+KILLED  G15 X single-template share off | 2 failed, 29 passed in 4.76s
+KILLED  G16 X top3 share off | 2 failed, 29 passed in 4.68s
+KILLED  G17 probe share off | 2 failed, 29 passed in 4.80s
+KILLED  G18 unused template off | 1 failed, 30 passed in 4.75s
+KILLED  G19 X template minimum off | 1 failed, 30 passed in 4.62s
+KILLED  G20 retired-in-catalog off | 1 failed, 30 passed in 4.72s
+KILLED  G21 retired selected off | 1 failed, 30 passed in 4.63s
+KILLED  G22 unknown template off | 1 failed, 30 passed in 4.78s
+KILLED  G23 assembly does not enforce | 1 failed, 30 passed in 4.85s
+KILLED  G24 plan not passed to gates | 2 failed, 29 passed in 4.86s
+KILLED  G25 X share threshold off-by-one | 1 failed, 30 passed in 4.83s
+KILLED  G26 probe share 1/20 | 2 failed, 29 passed in 4.73s
+26/26 killed
+RESTORED 0 31 passed in 4.63s

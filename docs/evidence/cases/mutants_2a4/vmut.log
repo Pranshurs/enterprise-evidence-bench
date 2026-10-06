@@ -1,0 +1,48 @@
+BASELINE 0 38 passed in 39.81s
+KILLED V1 invisible chunk not reported ['test_red_arm_unreadable_evidence_is_reported', 'test_red_arm_builder_rejects_a_principal_who_lacks_evidence'] | 2 failed, 36 passed in 42.96s
+KILLED V2 ungranted column not reported ['test_red_arm_unreadable_evidence_is_reported'] | 1 failed, 37 passed in 32.30s
+KILLED V3 doc value in DB row never found ['test_red_arm_document_value_also_held_in_the_database'] | 1 failed, 37 passed in 24.70s
+KILLED V4 cited documents not searched ['test_red_arm_cited_document_is_searched_when_no_slot_names_it'] | 1 failed, 37 passed in 24.69s
+KILLED V4b supplier's contracts not searched ['test_red_arm_uncited_contract_document_is_searched'] | 1 failed, 37 passed in 24.10s
+KILLED V5 SQL value in documents never found ['test_red_arm_database_value_also_printed_in_a_document', 'test_red_arm_cited_document_is_searched_when_no_slot_names_it', 'test_red_arm_uncited_contract_document_is_searched'] | 3 failed, 35 passed in 24.66s
+KILLED V6 necessity rejection off ['test_red_arm_single_source_case_is_not_cross_source'] | 1 failed, 37 passed in 25.33s
+KILLED V7 OOL-but-reconstructible accepted ['test_in_layer_and_out_of_layer_cases_are_told_apart', 'test_red_arm_wrong_layer_designation_is_rejected', 'test_red_arm_out_of_layer_answer_equal_to_a_governed_metric'] | 3 failed, 35 passed in 21.93s
+KILLED V8 in-layer-but-unreconstructible accepted ['test_red_arm_wrong_layer_designation_is_rejected'] | 1 failed, 37 passed in 24.67s
+KILLED V9 principal lacking evidence accepted ['test_red_arm_builder_rejects_a_principal_who_lacks_evidence'] | 1 failed, 37 passed in 25.17s
+KILLED V10 family rule off for singles ['test_a_family_is_used_once_outside_counterfactual_groups', 'test_red_arm_without_the_family_rule_a_question_is_reused', 'test_probe_requirement_is_checked_before_acceptance'] | 4 failed, 34 passed in 24.79s
+KILLED V11 restricted probe empty ['test_restricted_probe_records_only_values_that_differ', 'test_restricted_probe_on_a_principal_who_sees_part_of_the_rows', 'test_probe_requirement_is_checked_before_acceptance'] | 3 failed, 24 passed, 11 errors in 17.93s
+KILLED V12 principal value not compared ['test_red_arm_wrong_gold_value'] | 1 failed, 37 passed in 24.53s
+KILLED V13 gold SQL run as administrator ['test_every_sql_gold_agrees_under_the_askers_login', 'test_red_arm_value_only_another_principal_would_get'] | 2 failed, 36 passed in 23.95s
+KILLED V14 unrestricted probe not compared ['test_red_arm_wrong_unrestricted_probe_value'] | 1 failed, 37 passed in 24.95s
+KILLED V15 permitted member may have partial view ['test_denied_group_member_is_denied_a_necessary_unit', 'test_red_arm_permitted_group_member_must_see_the_complete_answer'] | 2 failed, 36 passed in 24.39s
+KILLED V16 denial not proven ['test_denied_group_member_is_denied_a_necessary_unit'] | 1 failed, 37 passed in 24.29s
+KILLED V17 group ignores used families ['test_red_arm_group_does_not_reuse_a_family'] | 1 failed, 37 passed in 24.80s
+KILLED V18 SQL error swallowed ['test_red_arm_value_only_another_principal_would_get', 'test_red_arm_gold_sql_that_does_not_run'] | 2 failed, 36 passed in 25.16s
+KILLED M1 ignore remaining filters ['test_search_enumerates_exactly_the_exhaustive_queries'] | 1 failed, 37 passed in 24.20s
+KILLED M2 values key omits filters ['test_search_enumerates_exactly_the_exhaustive_queries', 'test_search_verdict_equals_exhaustive_verdict'] | 2 failed, 36 passed in 11.12s
+KILLED M3 values key omits principal ['test_search_enumerates_exactly_the_exhaustive_queries', 'test_search_verdict_equals_exhaustive_verdict'] | 2 failed, 36 passed in 10.59s
+KILLED M4 empty po_count dropped ['test_search_enumerates_exactly_the_exhaustive_queries'] | 1 failed, 37 passed in 19.17s
+KILLED M5 index key omits dimension ['test_search_enumerates_exactly_the_exhaustive_queries', 'test_search_verdict_equals_exhaustive_verdict'] | 2 failed, 36 passed in 11.03s
+KILLED M6 subset key omits principal ['test_search_enumerates_exactly_the_exhaustive_queries', 'test_search_verdict_equals_exhaustive_verdict'] | 2 failed, 36 passed in 13.26s
+KILLED M9 rows cache omits principal ['test_red_arm_out_of_layer_answer_equal_to_a_governed_metric', 'test_probe_requirement_is_checked_before_acceptance', 'test_search_enumerates_exactly_the_exhaustive_queries'] | 4 failed, 23 passed, 11 errors in 5.18s
+KILLED M7r tolerance strict (upper) ['test_sub_plan_is_filled_slot_for_slot', 'test_build_is_deterministic', 'test_a_family_is_used_once_outside_counterfactual_groups'] | 27 passed, 11 errors in 17.92s
+KILLED M7s tolerance strict (lower) ['test_search_verdict_equals_exhaustive_verdict', 'test_sub_plan_is_filled_slot_for_slot', 'test_build_is_deterministic'] | 1 failed, 26 passed, 11 errors in 11.07s
+KILLED M8r grouping capped at one dim ['test_search_verdict_equals_exhaustive_verdict'] | 1 failed, 37 passed in 15.08s
+KILLED M10 sorted cache omits filter subset ['test_search_verdict_equals_exhaustive_verdict'] | 1 failed, 37 passed in 15.11s
+KILLED M11 sorted cache omits principal ['test_search_verdict_equals_exhaustive_verdict'] | 1 failed, 37 passed in 15.64s
+KILLED N1 probe requirement ignored ['test_every_probe_slot_is_bound_to_a_probe_case', 'test_probe_requirement_is_checked_before_acceptance'] | 2 failed, 36 passed in 23.33s
+KILLED N2 probe walk shares the ordinary cursor ['test_probe_requirement_is_checked_before_acceptance', 'test_sub_plan_is_filled_slot_for_slot', 'test_build_is_deterministic'] | 1 failed, 26 passed, 11 errors in 18.02s
+KILLED N3 probe slots never requested ['test_every_probe_slot_is_bound_to_a_probe_case'] | 1 failed, 37 passed in 23.29s
+KILLED N4 probe share floored ['test_probe_slots_take_the_share_of_every_split_over_the_strata'] | 1 failed, 37 passed in 23.64s
+KILLED N5 injection slots eligible for probes ['test_probe_slots_exclude_groups_injection_and_other_classes', 'test_sub_plan_is_filled_slot_for_slot', 'test_build_is_deterministic'] | 1 failed, 26 passed, 11 errors in 17.47s
+KILLED N6 group slots eligible for probes ['test_probe_slots_exclude_groups_injection_and_other_classes', 'test_every_probe_slot_is_bound_to_a_probe_case'] | 2 failed, 36 passed in 24.32s
+KILLED N7 least-used ignores counts ['test_least_used_template_is_tried_first'] | 1 failed, 37 passed in 25.77s
+KILLED N8 single fill does not count use ['test_template_use_counts_every_bound_family'] | 1 failed, 37 passed in 24.75s
+KILLED N9 group fill does not count use ['test_template_use_counts_every_bound_family'] | 1 failed, 37 passed in 25.77s
+KILLED N10 depends_on not followed ['test_red_arm_sql_fact_parameterised_by_a_document_needs_the_document', 'test_sub_plan_is_filled_slot_for_slot', 'test_build_is_deterministic'] | 1 failed, 26 passed, 11 errors in 19.90s
+KILLED N11 row index shared across principals ['test_restricted_probe_on_a_principal_who_sees_part_of_the_rows', 'test_probe_requirement_is_checked_before_acceptance', 'test_row_index_is_per_principal_and_complete'] | 3 failed, 24 passed, 11 errors in 18.58s
+KILLED N12 row index drops repeated keys ['test_probe_requirement_is_checked_before_acceptance', 'test_row_index_is_per_principal_and_complete', 'test_sub_plan_is_filled_slot_for_slot'] | 2 failed, 25 passed, 11 errors in 19.04s
+SURVIVED N13 off_contract filter missing [] | 38 passed in 26.52s
+KILLED N14 depends_on not recorded ['test_red_arm_sql_fact_parameterised_by_a_document_needs_the_document', 'test_sub_plan_is_filled_slot_for_slot', 'test_build_is_deterministic'] | 1 failed, 26 passed, 11 errors in 18.58s
+{'KILLED': 44, 'SURVIVED': 1}
+RESTORED 0 38 passed in 26.84s

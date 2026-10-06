@@ -254,7 +254,7 @@ def test_build_gate_accepts_the_real_layer(pg_dsn: str, built_db: str) -> None:
 
 # ---------------------------------------------------------------- expressiveness boundary
 # Frozen for the §13 experiment: changing the governed catalog is a versioned decision.
-METRIC_CATALOG_SHA256 = "1a8badb68dc849b82116ae29743b0f12f77f7c693fdec4fe8bede5f58320358f"
+METRIC_CATALOG_SHA256 = "2d031cde4b533ba633d42909041de0012aec3c2bcad567ecfbdd0af239822adb"
 FROZEN_METRICS = {"invoiced_amount", "ordered_amount", "effective_unit_cost", "po_count",
                   "raw_on_time_delivery_pct", "rejection_rate_pct", "budget_amount"}
 

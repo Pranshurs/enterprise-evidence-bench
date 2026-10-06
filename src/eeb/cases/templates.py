@@ -9,6 +9,7 @@ and is never the source of truth.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -32,6 +33,7 @@ class Ctx:
     quarters: list[str] = field(default_factory=list)
     suppliers: dict[str, dict[str, Any]] = field(default_factory=dict)
     cms_by_category: dict[str, list[str]] = field(default_factory=dict)
+    by_role: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
     def build(cls, data: InstanceData) -> Ctx:
@@ -42,12 +44,16 @@ class Ctx:
             qs.append(f"{y}Q{q}")
             y, q = (y + 1, 1) if q == 4 else (y, q + 1)
         cms: dict[str, list[str]] = {}
+        roles: dict[str, list[str]] = {}
         assert data.oracle is not None
         for p in data.principals:
             for a in data.oracle.active(p["principal_id"]):
+                if p["principal_id"] not in roles.setdefault(a["role"], []):
+                    roles[a["role"]].append(p["principal_id"])
                 if a["role"] == "category_manager":
                     cms.setdefault(a["param_value"], []).append(p["principal_id"])
-        return cls(data, qs, data.by("suppliers", "supplier_id"), cms)
+        return cls(data, qs, data.by("suppliers", "supplier_id"), cms,
+                   {r: sorted(ps) for r, ps in roles.items()})
 
     def name(self, sid: str) -> str:
         return f"{self.suppliers[sid]['name']} ({sid})"
@@ -66,9 +72,41 @@ class Ctx:
         cat = self.suppliers[sid]["category_id"]
         return sorted(self.cms_by_category.get(cat, [])) + ["fin_ctrl"]
 
+    def with_buyers(self, sid: str) -> list[str]:
+        """Principals who read orders and deliveries: the supplier's category managers and
+        the finance controller in full, business-unit buyers for their own unit only."""
+        return self.supplier_principals(sid) + self.by_role.get("bu_buyer", [])
+
+    def with_ap(self, sid: str) -> list[str]:
+        """Principals who read invoices: as above, with accounts-payable clerks seeing
+        their own business unit only."""
+        return self.supplier_principals(sid) + self.by_role.get("ap_clerk", [])
+
+    def order(self, po_id: str) -> dict[str, Any]:
+        return self.data.global_view().by("purchase_orders", "po_id")[po_id][0]
+
 
 def qbounds(q: str) -> tuple[dt.date, dt.date]:
     return quarter_bounds(q)
+
+
+def previous_quarter(q: str) -> str:
+    y, n = int(q[:4]), int(q[5])
+    return f"{y - 1}Q4" if n == 1 else f"{y}Q{n - 1}"
+
+
+def quarter_of(d: dt.date) -> str:
+    return f"{d.year}Q{(d.month - 1) // 3 + 1}"
+
+
+def order_totals(v: PrincipalView, po_ids: list[str]) -> dict[str, Decimal]:
+    lines = v.by("po_lines", "po_id")
+    return {p: sum((ln["qty"] * ln["unit_price"] for ln in lines.get(p, [])), Decimal(0))
+            for p in po_ids}
+
+
+PO_TOTALS = ("(SELECT po_id, sum(qty * unit_price) AS total FROM eeb.po_lines GROUP BY po_id) t "
+             "ON t.po_id = p.po_id ")
 
 
 def between(col: str, q: str) -> str:
@@ -78,13 +116,22 @@ def between(col: str, q: str) -> str:
 
 # ---------------------------------------------------------------------------- SQL facts
 def _supplier_pos(v: PrincipalView, sid: str) -> dict[str, dict[str, Any]]:
-    return {p["po_id"]: p for p in v.rows("purchase_orders") if p["supplier_id"] == sid}
+    return {p["po_id"]: p for p in v.by("purchase_orders", "supplier_id").get(sid, [])}
 
 
 def _promised_lines(v: PrincipalView, sid: str, q: str) -> list[dict[str, Any]]:
     a, b = qbounds(q)
-    pos = _supplier_pos(v, sid)
-    return [ln for ln in v.rows("po_lines") if ln["po_id"] in pos and a <= ln["promised_date"] <= b]
+    lines = v.by("po_lines", "po_id")
+    return [ln for po in _supplier_pos(v, sid) for ln in lines.get(po, [])
+            if a <= ln["promised_date"] <= b]
+
+
+def _receipts(v: PrincipalView, lines: list[dict[str, Any]]
+              ) -> dict[tuple[str, int], dict[str, Any]]:
+    """The visible goods receipt of each of ``lines`` that has one."""
+    by_po = v.by("goods_receipts", "po_id")
+    return {(r["po_id"], r["line_no"]): r
+            for po in dict.fromkeys(ln["po_id"] for ln in lines) for r in by_po.get(po, [])}
 
 
 DELIV_USES = {"po_lines": ["po_id", "line_no", "promised_date", "qty", "unit_price"],
@@ -101,7 +148,7 @@ def raw_otd(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
     lines = _promised_lines(v, sid, q)
     if not lines:
         raise NotApplicable("no lines")
-    rec = {(r["po_id"], r["line_no"]): r for r in v.rows("goods_receipts")}
+    rec = _receipts(v, lines)
     ok = sum(1 for ln in lines if (r := rec.get((ln["po_id"], ln["line_no"]))) is not None
              and r["received_date"] <= ln["promised_date"])
     return F.sql_fact("raw_otd_pct", "number", F.rnd(Decimal(100 * ok) / len(lines), 2),
@@ -116,7 +163,7 @@ def adjusted_otd(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
     lines = _promised_lines(v, sid, q)
     if not lines:
         raise NotApplicable("no lines")
-    rec = {(r["po_id"], r["line_no"]): r for r in v.rows("goods_receipts")}
+    rec = _receipts(v, lines)
     ok = sum(1 for ln in lines if (r := rec.get((ln["po_id"], ln["line_no"]))) is not None
              and (r["received_date"] <= ln["promised_date"]
                   or r["delay_cause"] in ("force_majeure", "buyer")))
@@ -141,7 +188,7 @@ def credit_base(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
 
 def rejection_pct(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
     lines = _promised_lines(v, sid, q)
-    rec = {(r["po_id"], r["line_no"]): r for r in v.rows("goods_receipts")}
+    rec = _receipts(v, lines)
     rs = [rec[(ln["po_id"], ln["line_no"])] for ln in lines if (ln["po_id"], ln["line_no"]) in rec]
     recv = sum(r["qty_received"] for r in rs)
     if recv == 0:
@@ -157,11 +204,12 @@ def rejection_pct(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
 
 def invoiced_amount(v: PrincipalView, sid: str, q: str) -> dict[str, Any]:
     a, b = qbounds(q)
-    inv = {i["invoice_id"] for i in v.rows("invoices")
-           if i["supplier_id"] == sid and a <= i["invoice_date"] <= b}
+    inv = [i["invoice_id"] for i in v.by("invoices", "supplier_id").get(sid, [])
+           if a <= i["invoice_date"] <= b]
     if not inv:
         raise NotApplicable("no invoices")
-    val = F.rnd(sum((il["amount"] for il in v.rows("invoice_lines") if il["invoice_id"] in inv),
+    by_invoice = v.by("invoice_lines", "invoice_id")
+    val = F.rnd(sum((il["amount"] for i in inv for il in by_invoice.get(i, [])),
                     Decimal(0)), 2)
     return F.sql_fact("invoiced_amount", "money", val,
                       "SELECT round(sum(il.amount), 2) FROM eeb.invoice_lines il JOIN "
@@ -175,7 +223,8 @@ def unit_cost(v: PrincipalView, sid: str, item: str, q: str, fid: str = "unit_co
               ) -> dict[str, Any]:
     a, b = qbounds(q)
     pos = {k for k, p in _supplier_pos(v, sid).items() if a <= p["order_date"] <= b}
-    lines = [ln for ln in v.rows("po_lines") if ln["po_id"] in pos and ln["item_id"] == item]
+    by_po = v.by("po_lines", "po_id")
+    lines = [ln for po in sorted(pos) for ln in by_po.get(po, []) if ln["item_id"] == item]
     qty = sum(ln["qty"] for ln in lines)
     if qty == 0:
         raise NotApplicable("no lines")
@@ -245,6 +294,9 @@ class SupplierQuarter(Template):
 class SInvoiced(SupplierQuarter):
     id, cls, source = "S.invoiced_amount", "S", "sql"
 
+    def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
+        return ctx.with_ap(slots["supplier_id"])
+
     def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
         return (f"What was the total invoiced amount from {ctx.name(s['supplier_id'])} in "
                 f"{s['quarter']}?")
@@ -255,6 +307,9 @@ class SInvoiced(SupplierQuarter):
 
 class SRawOtd(SupplierQuarter):
     id, cls, source = "S.raw_otd", "S", "sql"
+
+    def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
+        return ctx.with_buyers(slots["supplier_id"])
 
     def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
         return (f"Before any contractual exclusions, what share of order lines from "
@@ -267,6 +322,9 @@ class SRawOtd(SupplierQuarter):
 class SBuyerLate(SupplierQuarter):
     id, cls, source, ool = "S.buyer_caused_late", "S", "sql", True
 
+    def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
+        return ctx.with_buyers(slots["supplier_id"])
+
     def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
         return (f"How many order lines from {ctx.name(s['supplier_id'])} promised in "
                 f"{s['quarter']} arrived late for reasons recorded as caused by ExampleCo?")
@@ -275,7 +333,7 @@ class SBuyerLate(SupplierQuarter):
         lines = _promised_lines(v, s["supplier_id"], s["quarter"])
         if not lines:
             raise NotApplicable("no lines")
-        rec = {(r["po_id"], r["line_no"]): r for r in v.rows("goods_receipts")}
+        rec = _receipts(v, lines)
         n = sum(1 for ln in lines if (r := rec.get((ln["po_id"], ln["line_no"]))) is not None
                 and r["received_date"] > ln["promised_date"] and r["delay_cause"] == "buyer")
         f = F.sql_fact("buyer_caused_late_lines", "number", n,
@@ -286,36 +344,11 @@ class SBuyerLate(SupplierQuarter):
         return _answer([f], ["buyer_caused_late_lines"])
 
 
-class SUnpaid(SupplierQuarter):
-    id, cls, source, ool = "S.unpaid_invoices", "S", "sql", True
-
-    def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
-        return ["fin_ctrl"]
-
-    def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
-        return (f"How many invoices from {ctx.name(s['supplier_id'])} dated in {s['quarter']} "
-                "had not been paid as of today?")
-
-    def gold(self, ctx: Ctx, s: dict[str, Any], v: PrincipalView) -> Gold:
-        a, b = qbounds(s["quarter"])
-        inv = [i for i in v.rows("invoices")
-               if i["supplier_id"] == s["supplier_id"] and a <= i["invoice_date"] <= b]
-        if not inv:
-            raise NotApplicable("no invoices")
-        paid = {p["invoice_id"] for p in v.rows("payments")}
-        n = sum(1 for i in inv if i["invoice_id"] not in paid)
-        f = F.sql_fact("unpaid_invoices", "number", n,
-                       "SELECT count(*) FROM eeb.invoices i LEFT JOIN eeb.payments y ON "
-                       "y.invoice_id = i.invoice_id WHERE i.supplier_id = "
-                       f"{F.lit(s['supplier_id'])} AND "
-                       f"{between('i.invoice_date', s['quarter'])} AND y.payment_id IS NULL",
-                       {"invoices": ["invoice_id", "supplier_id", "invoice_date"],
-                        "payments": ["payment_id", "invoice_id"]})
-        return _answer([f], ["unpaid_invoices"])
-
-
 class SAdjustedOtd(SupplierQuarter):
     id, cls, source, ool = "S.adjusted_otd", "S", "sql", True
+
+    def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
+        return ctx.with_buyers(slots["supplier_id"])
 
     def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
         return (f"Counting a late line as on time when its delay is recorded as force majeure "
@@ -329,13 +362,16 @@ class SAdjustedOtd(SupplierQuarter):
 class SLateValue(SupplierQuarter):
     id, cls, source, ool = "S.late_line_value", "S", "sql", True
 
+    def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
+        return ctx.with_buyers(slots["supplier_id"])
+
     def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
         return (f"What was the total order value of the lines from {ctx.name(s['supplier_id'])} "
                 f"promised in {s['quarter']} that were received after their promised date?")
 
     def gold(self, ctx: Ctx, s: dict[str, Any], v: PrincipalView) -> Gold:
         lines = _promised_lines(v, s["supplier_id"], s["quarter"])
-        rec = {(r["po_id"], r["line_no"]): r for r in v.rows("goods_receipts")}
+        rec = _receipts(v, lines)
         late = [ln for ln in lines if (r := rec.get((ln["po_id"], ln["line_no"]))) is not None
                 and r["received_date"] > ln["promised_date"]]
         if not late:
@@ -356,7 +392,7 @@ class SUnpaidAmount(SupplierQuarter):
     id, cls, source, ool = "S.unpaid_amount", "S", "sql", True
 
     def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
-        return ["fin_ctrl"]
+        return ["fin_ctrl", *ctx.by_role.get("ap_clerk", [])]
 
     def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
         return (f"What is the total amount of the invoices from {ctx.name(s['supplier_id'])} "
@@ -364,11 +400,11 @@ class SUnpaidAmount(SupplierQuarter):
 
     def gold(self, ctx: Ctx, s: dict[str, Any], v: PrincipalView) -> Gold:
         a, b = qbounds(s["quarter"])
-        paid = {p["invoice_id"] for p in v.rows("payments")}
-        unpaid = {i["invoice_id"] for i in v.rows("invoices")
-                  if i["supplier_id"] == s["supplier_id"] and a <= i["invoice_date"] <= b
-                  and i["invoice_id"] not in paid}
-        amounts = [il["amount"] for il in v.rows("invoice_lines") if il["invoice_id"] in unpaid]
+        paid = v.by("payments", "invoice_id")
+        unpaid = [i["invoice_id"] for i in v.by("invoices", "supplier_id").get(s["supplier_id"], [])
+                  if a <= i["invoice_date"] <= b and i["invoice_id"] not in paid]
+        by_invoice = v.by("invoice_lines", "invoice_id")
+        amounts = [il["amount"] for i in unpaid for il in by_invoice.get(i, [])]
         if not amounts:
             raise NotApplicable("no unpaid invoice lines")
         f = F.sql_fact("unpaid_amount", "money", F.rnd(sum(amounts, Decimal(0)), 2),
@@ -563,7 +599,8 @@ class XExpedite(XBase):
                if a <= p["order_date"] <= b}
         if not pos:
             raise NotApplicable("no orders")
-        n = sum(1 for ln in v.rows("po_lines") if ln["po_id"] in pos and ln["expedited"])
+        by_po = v.by("po_lines", "po_id")
+        n = sum(1 for po in pos for ln in by_po.get(po, []) if ln["expedited"])
         f = F.sql_fact("expedited_lines", "number", n,
                        "SELECT count(*) FROM eeb.po_lines l JOIN eeb.purchase_orders p ON "
                        f"p.po_id = l.po_id WHERE p.supplier_id = {F.lit(s['supplier_id'])} AND "
@@ -574,6 +611,9 @@ class XExpedite(XBase):
 
 
 class XCompliance(Template):
+    """Redesigned before freeze. The first version answered with the list of order ids and
+    did not declare that its query takes the policy threshold as a parameter, so the
+    necessity check saw a database-only answer and rejected every binding."""
     id, cls, source, ool = "X.off_contract_compliance", "X", "both", True
 
     def bindings(self, ctx: Ctx) -> Iterator[dict[str, Any]]:
@@ -585,40 +625,300 @@ class XCompliance(Template):
         return ["fin_ctrl"]
 
     def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
-        return (f"Which off-contract purchase orders in {s['currency']} placed in {s['quarter']} "
-                "exceeded the CFO exception threshold of the procurement policy in force at the "
-                "time without an exception covering their full value?")
+        return (f"What is the total value of the off-contract purchase orders in {s['currency']} "
+                f"placed in {s['quarter']} that exceeded the CFO exception threshold of the "
+                "procurement policy in force at the time and had no exception covering their "
+                "full value?")
 
     def gold(self, ctx: Ctx, s: dict[str, Any], v: PrincipalView) -> Gold:
         a, b = qbounds(s["quarter"])
-        if ctx.data.version_effective_on("DOC-POL-PROC", a) != ctx.data.version_effective_on(
-                "DOC-POL-PROC", b):
-            raise NotApplicable("policy changed within the quarter")
         ver = ctx.data.version_effective_on("DOC-POL-PROC", a)
-        assert ver is not None
+        if ver is None or ver != ctx.data.version_effective_on("DOC-POL-PROC", b):
+            raise NotApplicable("policy changed within the quarter")
         th = F.doc_fact(ctx.data, "threshold", "DOC-POL-PROC", ver, F.p_threshold(s["currency"]),
                         "money", s["currency"])
-        totals: dict[str, Decimal] = {}
-        for ln in v.rows("po_lines"):
-            totals[ln["po_id"]] = totals.get(ln["po_id"], Decimal(0)) + ln["qty"] * ln["unit_price"]
+        pos = [p["po_id"] for p in v.rows("purchase_orders")
+               if p["contract_id"] is None and p["currency"] == s["currency"]
+               and a <= p["order_date"] <= b]
+        totals = order_totals(v, pos)
         exc = {e["po_id"]: e["amount"] for e in v.rows("policy_exceptions")}
-        ids = sorted(p["po_id"] for p in v.rows("purchase_orders")
-                     if p["contract_id"] is None and p["currency"] == s["currency"]
-                     and a <= p["order_date"] <= b
-                     and totals.get(p["po_id"], Decimal(0)) > th["value"]
-                     and (p["po_id"] not in exc or exc[p["po_id"]] < totals[p["po_id"]]))
-        f = F.sql_fact("noncompliant_po_ids", "entity_set", ids,
-                       "SELECT p.po_id FROM eeb.purchase_orders p JOIN (SELECT po_id, "
-                       "sum(qty * unit_price) AS total FROM eeb.po_lines GROUP BY po_id) t ON "
-                       "t.po_id = p.po_id LEFT JOIN eeb.policy_exceptions e ON e.po_id = p.po_id "
+        open_ = [p for p in pos if totals[p] > th["value"] and (p not in exc
+                                                                or exc[p] < totals[p])]
+        if not open_:
+            raise NotApplicable("no uncovered order above the threshold")
+        f = F.sql_fact("uncovered_value", "money",
+                       F.rnd(sum((totals[p] for p in open_), Decimal(0)), 2),
+                       f"SELECT round(sum(t.total), 2) FROM eeb.purchase_orders p JOIN {PO_TOTALS}"
+                       "LEFT JOIN eeb.policy_exceptions e ON e.po_id = p.po_id "
                        f"WHERE p.contract_id IS NULL AND p.currency = {F.lit(s['currency'])} AND "
                        f"{between('p.order_date', s['quarter'])} AND t.total > {th['value']} AND "
-                       "(e.exception_id IS NULL OR e.amount < t.total) ORDER BY p.po_id",
+                       "(e.exception_id IS NULL OR e.amount < t.total)",
                        {"purchase_orders": ["po_id", "contract_id", "currency", "order_date"],
                         "po_lines": ["po_id", "qty", "unit_price"],
-                        "policy_exceptions": ["exception_id", "po_id", "amount"]})
-        return _answer([th, f], ["noncompliant_po_ids"],
-                       {"noncompliant_po_ids": ["doc", "sql"]})
+                        "policy_exceptions": ["exception_id", "po_id", "amount"]},
+                       s["currency"], "0.01", depends_on=["threshold"])
+        return _answer([th, f], ["uncovered_value"], {"uncovered_value": ["doc", "sql"]},
+                       temporal={"version_required": ver, "period": s["quarter"]})
+
+
+class XExceptionRequired(SupplierQuarter):
+    id, cls, source, ool = "X.exception_required_value", "X", "both", True
+
+    def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
+        return ctx.with_buyers(slots["supplier_id"])
+
+    def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
+        return (f"What was the total value of the off-contract purchase orders placed with "
+                f"{ctx.name(s['supplier_id'])} in {s['quarter']} that each needed a CFO "
+                "exception under the procurement policy in force at the time?")
+
+    def gold(self, ctx: Ctx, s: dict[str, Any], v: PrincipalView) -> Gold:
+        a, b = qbounds(s["quarter"])
+        ver = ctx.data.version_effective_on("DOC-POL-PROC", a)
+        if ver is None or ver != ctx.data.version_effective_on("DOC-POL-PROC", b):
+            raise NotApplicable("policy changed within the quarter")
+        cur = ctx.suppliers[s["supplier_id"]]["currency"]
+        th = F.doc_fact(ctx.data, "threshold", "DOC-POL-PROC", ver, F.p_threshold(cur),
+                        "money", cur)
+        pos = [p["po_id"] for p in v.by("purchase_orders", "supplier_id").get(s["supplier_id"], [])
+               if p["contract_id"] is None and a <= p["order_date"] <= b]
+        totals = order_totals(v, pos)
+        need = [p for p in pos if totals[p] > th["value"]]
+        if not need:
+            raise NotApplicable("no off-contract order above the threshold")
+        f = F.sql_fact("exception_required_value", "money",
+                       F.rnd(sum((totals[p] for p in need), Decimal(0)), 2),
+                       f"SELECT round(sum(t.total), 2) FROM eeb.purchase_orders p JOIN {PO_TOTALS}"
+                       f"WHERE p.supplier_id = {F.lit(s['supplier_id'])} AND p.contract_id IS NULL "
+                       f"AND {between('p.order_date', s['quarter'])} AND t.total > {th['value']}",
+                       {"purchase_orders": ["po_id", "supplier_id", "contract_id", "order_date"],
+                        "po_lines": ["po_id", "qty", "unit_price"]},
+                       cur, "0.01", depends_on=["threshold"])
+        return _answer([th, f], ["exception_required_value"],
+                       {"exception_required_value": ["doc", "sql"]},
+                       temporal={"version_required": ver, "period": s["quarter"]})
+
+
+class XPaidLate(Template):
+    id, cls, source = "X.paid_late_under_signed_terms", "X", "both"
+    ool, supplier_scoped = True, True
+
+    def bindings(self, ctx: Ctx) -> Iterator[dict[str, Any]]:
+        for c in ctx.data.conflicts:
+            if c["kind"] == "payment_terms":
+                for q in ctx.quarters:
+                    yield {"supplier_id": c["supplier_id"], "contract_id": c["contract_id"],
+                           "quarter": q}
+
+    def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
+        return ["fin_ctrl", *ctx.by_role.get("ap_clerk", [])]
+
+    def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
+        return (f"Contract {s['contract_id']} is the signed agreement with "
+                f"{ctx.name(s['supplier_id'])}. Measured against its payment term, what is the "
+                f"total of the invoices from them dated in {s['quarter']} that were paid late?")
+
+    def gold(self, ctx: Ctx, s: dict[str, Any], v: PrincipalView) -> Gold:
+        a, b = qbounds(s["quarter"])
+        did = f"DOC-MSA-{s['contract_id']}"
+        ver = ctx.data.version_effective_on(did, a)
+        if ver is None or ver != ctx.data.version_effective_on(did, b):
+            raise NotApplicable("agreement not in force for the whole quarter")
+        d = F.doc_fact(ctx.data, "contract_terms_days", did, ver, F.P_PAYTERMS, "number", "days")
+        paid = v.by("payments", "invoice_id")
+        late = [i for i in v.by("invoices", "supplier_id").get(s["supplier_id"], [])
+                if a <= i["invoice_date"] <= b and i["invoice_id"] in paid
+                and (paid[i["invoice_id"]][0]["paid_date"] - i["invoice_date"]).days > d["value"]]
+        if not late:
+            raise NotApplicable("no invoice paid late")
+        cur = ctx.suppliers[s["supplier_id"]]["currency"]
+        f = F.sql_fact("paid_late_amount", "money",
+                       F.rnd(sum((i["total"] for i in late), Decimal(0)), 2),
+                       "SELECT round(sum(i.total), 2) FROM eeb.invoices i JOIN eeb.payments y ON "
+                       f"y.invoice_id = i.invoice_id WHERE i.supplier_id = "
+                       f"{F.lit(s['supplier_id'])} AND {between('i.invoice_date', s['quarter'])} "
+                       f"AND y.paid_date - i.invoice_date > {d['value']}",
+                       {"invoices": ["invoice_id", "supplier_id", "invoice_date", "total"],
+                        "payments": ["invoice_id", "paid_date"]},
+                       cur, "0.01", depends_on=["contract_terms_days"])
+        return _answer([d, f], ["paid_late_amount"], {"paid_late_amount": ["doc", "sql"]})
+
+
+class XPoThreshold(Template):
+    id, cls, source, supplier_scoped = "X.order_value_against_threshold", "X", "both", True
+
+    def bindings(self, ctx: Ctx) -> Iterator[dict[str, Any]]:
+        for p in sorted(ctx.data.tables["purchase_orders"], key=lambda p: p["po_id"]):
+            if p["contract_id"] is None:
+                yield {"supplier_id": p["supplier_id"], "po_id": p["po_id"]}
+
+    def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
+        return ctx.with_buyers(slots["supplier_id"])
+
+    def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
+        on = ctx.order(s["po_id"])["order_date"]
+        return (f"Off-contract purchase order {s['po_id']} was placed with "
+                f"{ctx.name(s['supplier_id'])} on {on.isoformat()}. By how much does its total "
+                "value exceed, or fall short of, the CFO exception threshold in force on that "
+                "date, and did it need a CFO exception?")
+
+    def gold(self, ctx: Ctx, s: dict[str, Any], v: PrincipalView) -> Gold:
+        rows = v.by("purchase_orders", "po_id").get(s["po_id"])
+        if not rows:
+            raise NotApplicable("order not visible")
+        po = rows[0]
+        ver = ctx.data.version_effective_on("DOC-POL-PROC", po["order_date"])
+        if ver is None:
+            raise NotApplicable("no policy in force")
+        th = F.doc_fact(ctx.data, "threshold", "DOC-POL-PROC", ver,
+                        F.p_threshold(po["currency"]), "money", po["currency"])
+        total = F.sql_fact("order_value", "money",
+                           F.rnd(order_totals(v, [s["po_id"]])[s["po_id"]], 2),
+                           "SELECT round(sum(qty * unit_price), 2) FROM eeb.po_lines WHERE "
+                           f"po_id = {F.lit(s['po_id'])}",
+                           {"po_lines": ["po_id", "qty", "unit_price"]}, po["currency"], "0.01")
+        excess = F.derived_fact("excess_over_threshold", "money", total["value"] - th["value"],
+                                "subtract", ["order_value", "threshold"], po["currency"], "0.01")
+        need = F.derived_fact("exception_required", "boolean", total["value"] > th["value"],
+                              "greater_than", ["order_value", "threshold"])
+        return _answer([th, total, excess, need], ["excess_over_threshold", "exception_required"],
+                       temporal={"version_required": ver, "as_of": po["order_date"]})
+
+
+class XAverageOffContract(SupplierQuarter):
+    id, cls, source = "X.average_off_contract_order", "X", "both"
+
+    def bindings(self, ctx: Ctx) -> Iterator[dict[str, Any]]:
+        for b in super().bindings(ctx):
+            yield {**b, "off_contract": "yes"}
+
+    def principals(self, ctx: Ctx, slots: dict[str, Any]) -> list[str]:
+        return ctx.with_buyers(slots["supplier_id"])
+
+    def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
+        return (f"Was the average value of an off-contract purchase order placed with "
+                f"{ctx.name(s['supplier_id'])} in {s['quarter']} above the CFO exception "
+                "threshold in force at the time, and by how much did it exceed or fall short "
+                "of it?")
+
+    def gold(self, ctx: Ctx, s: dict[str, Any], v: PrincipalView) -> Gold:
+        a, b = qbounds(s["quarter"])
+        ver = ctx.data.version_effective_on("DOC-POL-PROC", a)
+        if ver is None or ver != ctx.data.version_effective_on("DOC-POL-PROC", b):
+            raise NotApplicable("policy changed within the quarter")
+        cur = ctx.suppliers[s["supplier_id"]]["currency"]
+        th = F.doc_fact(ctx.data, "threshold", "DOC-POL-PROC", ver, F.p_threshold(cur),
+                        "money", cur)
+        pos = [p["po_id"] for p in v.by("purchase_orders", "supplier_id").get(s["supplier_id"], [])
+               if p["contract_id"] is None and a <= p["order_date"] <= b]
+        totals = order_totals(v, pos)
+        pos = [p for p in pos if v.by("po_lines", "po_id").get(p)]
+        if len(pos) < 2:
+            raise NotApplicable("fewer than two off-contract orders")
+        where = (f"WHERE p.supplier_id = {F.lit(s['supplier_id'])} AND p.contract_id IS NULL AND "
+                 f"{between('p.order_date', s['quarter'])}")
+        uses = {"purchase_orders": ["po_id", "supplier_id", "contract_id", "order_date"],
+                "po_lines": ["po_id", "qty", "unit_price"]}
+        value = F.sql_fact("off_contract_value", "money",
+                           F.rnd(sum((totals[p] for p in pos), Decimal(0)), 2),
+                           "SELECT round(sum(l.qty * l.unit_price), 2) FROM eeb.po_lines l JOIN "
+                           f"eeb.purchase_orders p ON p.po_id = l.po_id {where}", uses, cur,
+                           "0.01")
+        count = F.sql_fact("off_contract_orders", "number", len(pos),
+                           "SELECT count(DISTINCT l.po_id) FROM eeb.po_lines l JOIN "
+                           f"eeb.purchase_orders p ON p.po_id = l.po_id {where}", uses)
+        avg = F.derived_fact("average_order_value", "money",
+                             F.rnd(value["value"] / len(pos), 2), "divide",
+                             ["off_contract_value", "off_contract_orders"], cur, "0.01")
+        excess = F.derived_fact("excess_over_threshold", "money", avg["value"] - th["value"],
+                                "subtract", ["average_order_value", "threshold"], cur, "0.01")
+        above = F.derived_fact("average_above_threshold", "boolean", avg["value"] > th["value"],
+                               "greater_than", ["average_order_value", "threshold"])
+        return _answer([th, value, count, avg, excess, above],
+                       ["average_above_threshold", "excess_over_threshold"],
+                       temporal={"version_required": ver, "period": s["quarter"]})
+
+
+class XRebate(Template):
+    id, cls, source, supplier_scoped = "X.rebate_accrual", "X", "both", True
+
+    def _memos(self, ctx: Ctx) -> dict[tuple[str, int], str]:
+        out: dict[tuple[str, int], str] = {}
+        for (doc_id, ver), d in sorted(ctx.data.docs.items()):
+            if doc_id.startswith("DOC-FIN-") and ver == 1:
+                for m in re.finditer(r"rebate of [\d.]+% applies to [^()]*\((SUP-\d+)\) for "
+                                     r"(\d{4})\.", d["rendered"]):
+                    out[(m.group(1), int(m.group(2)))] = doc_id
+        return out
+
+    def bindings(self, ctx: Ctx) -> Iterator[dict[str, Any]]:
+        for sid, year in sorted(self._memos(ctx)):
+            for q in ctx.quarters:
+                if int(q[:4]) == year:
+                    yield {"supplier_id": sid, "quarter": q}
+
+    def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
+        return (f"What rebate accrues on the invoices from {ctx.name(s['supplier_id'])} dated in "
+                f"{s['quarter']} under the confidential volume rebate granted to them for "
+                f"{s['quarter'][:4]}?")
+
+    def gold(self, ctx: Ctx, s: dict[str, Any], v: PrincipalView) -> Gold:
+        year = int(s["quarter"][:4])
+        doc_id = self._memos(ctx).get((s["supplier_id"], year))
+        if doc_id is None:
+            raise NotApplicable("no rebate")
+        pct = F.doc_fact(ctx.data, "rebate_pct", doc_id, 1, F.p_rebate(s["supplier_id"], year),
+                         "number", "percent")
+        inv = invoiced_amount(v, s["supplier_id"], s["quarter"])
+        amt = F.derived_fact("rebate_amount", "money", F.rnd(inv["value"] * pct["value"] / 100, 2),
+                             "pct_of", ["rebate_pct", "invoiced_amount"], None, "0.01")
+        return _answer([pct, inv, amt], ["rebate_amount"])
+
+
+class XIndexation(Template):
+    id, cls, source, supplier_scoped = "X.indexation_observed", "X", "both", True
+
+    def bindings(self, ctx: Ctx) -> Iterator[dict[str, Any]]:
+        for doc_id, ver in sorted(ctx.data.docs):
+            if not (doc_id.startswith("DOC-MSA-") and ver == 2):
+                continue
+            text = ctx.data.docs[(doc_id, ver)]["rendered"]
+            when = re.search(F.P_INDEXATION_DATE, text)
+            items = re.search(r"scheduled unit prices? of (.+?) (?:is|are) increased by", text)
+            if when is None or items is None:
+                continue
+            eff = dt.datetime.strptime(when.group(1), "%d %B %Y").date()
+            if eff.day != 1 or eff.month not in (1, 4, 7, 10):
+                continue
+            cid = doc_id[len("DOC-MSA-"):]
+            sid = next(c["supplier_id"] for c in ctx.data.tables["contracts"]
+                       if c["contract_id"] == cid)
+            for item in re.findall(r"\((ITM-[A-Z0-9]+-\d+)\)", items.group(1)):
+                yield {"supplier_id": sid, "contract_id": cid, "item_id": item,
+                       "quarter_before": previous_quarter(quarter_of(eff)),
+                       "quarter_after": quarter_of(eff)}
+
+    def question(self, ctx: Ctx, s: dict[str, Any]) -> str:
+        return (f"Contract {s['contract_id']} with {ctx.name(s['supplier_id'])} was amended to "
+                f"index the scheduled price of item {s['item_id']}. By how many percent did the "
+                f"effective unit cost of that item change from {s['quarter_before']} to "
+                f"{s['quarter_after']}, and by how many points does that differ from the "
+                "contractual increase?")
+
+    def gold(self, ctx: Ctx, s: dict[str, Any], v: PrincipalView) -> Gold:
+        pct = F.doc_fact(ctx.data, "indexation_pct", f"DOC-MSA-{s['contract_id']}", 2,
+                         F.P_INDEXATION, "number", "percent")
+        before = unit_cost(v, s["supplier_id"], s["item_id"], s["quarter_before"],
+                           "unit_cost_before")
+        after = unit_cost(v, s["supplier_id"], s["item_id"], s["quarter_after"],
+                          "unit_cost_after")
+        change = F.rnd((after["value"] / before["value"] - 1) * 100, 2)
+        obs = F.derived_fact("observed_change_pct", "number", change, "pct_change",
+                             ["unit_cost_before", "unit_cost_after"], "percent", "0.01")
+        diff = F.derived_fact("difference_points", "number", change - pct["value"], "subtract",
+                              ["observed_change_pct", "indexation_pct"], "points", "0.01")
+        return _answer([pct, before, after, obs, diff], ["observed_change_pct",
+                                                         "difference_points"])
 
 
 # ---- C: conflicting in-force sources -----------------------------------------------------
@@ -895,11 +1195,21 @@ class HHostile(Template):
         return _abstain("harmful_request", harm_category=self.FORMS[s["form"]][0])
 
 
+# Templates removed before the corpus was frozen, with the reason. They bind no case.
+RETIRED_PRE_FREEZE: dict[str, str] = {
+    "S.unpaid_invoices": (
+        "Answered with a count of unpaid invoices. Every one of 600 bindings was rejected as "
+        "reconstructible: a small integer is returned by some governed metric query. "
+        "Redesigned as S.unpaid_amount, which answers with the unpaid amount."),
+}
+
 TEMPLATES: tuple[Template, ...] = (
-    SInvoiced(), SRawOtd(), SBuyerLate(), SUnpaid(), SAdjustedOtd(), SLateValue(),
+    SInvoiced(), SRawOtd(), SBuyerLate(), SAdjustedOtd(), SLateValue(),
     SUnpaidAmount(),
     DOtdTarget(), DCreditRate(), DCap(), DQuality(), DSurcharge(),
     XRawOtdMet(), XRawOtdGap(), XRejectMet(), XCredit(), XExpedite(), XCompliance(),
+    XExceptionRequired(), XPaidLate(), XPoThreshold(), XAverageOffContract(), XRebate(),
+    XIndexation(),
     CThreshold(), CPaymentTerms(), CForceMajeure(),
     TThreshold(), TIndexation(),
     UOutOfRange(), UMissingClause(),

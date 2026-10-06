@@ -48,9 +48,16 @@ def doc_fact(data: InstanceData, fid: str, doc_id: str, version: int, pattern: s
 
 
 def sql_fact(fid: str, kind: str, value: Any, gold_sql: str, uses: dict[str, list[str]],
-             unit: str | None = None, tolerance: str = "0") -> dict[str, Any]:
-    return {"fact_id": fid, "source": "sql", "kind": kind, "value": value, "unit": unit,
-            "tolerance": tolerance, "gold_sql": gold_sql, "uses": uses}
+             unit: str | None = None, tolerance: str = "0",
+             depends_on: list[str] | None = None) -> dict[str, Any]:
+    """``depends_on`` names the facts whose values the query takes as parameters (for
+    example a threshold read from a document). Such a fact cannot be computed without
+    them, so the necessity check treats them as its inputs."""
+    f = {"fact_id": fid, "source": "sql", "kind": kind, "value": value, "unit": unit,
+         "tolerance": tolerance, "gold_sql": gold_sql, "uses": uses}
+    if depends_on:
+        f["depends_on"] = depends_on
+    return f
 
 
 def derived_fact(fid: str, kind: str, value: Any, op: str, inputs: list[str],
@@ -75,6 +82,10 @@ P_PAYTERMS = r"Invoices are payable within (\d+) days of the invoice date"
 P_INDEXATION = r"are increased by ([\d.]+)%"
 P_INDEXATION_DATE = r"with effect from (\d{1,2} [A-Z][a-z]+ \d{4})"
 P_FORCE_MAJEURE = r"Classified as force majeure: (yes|no)\."
+
+
+def p_rebate(supplier_id: str, year: int) -> str:
+    return rf"rebate of ([\d.]+)% applies to [^()]*\({supplier_id}\) for {year}\."
 
 
 def p_threshold(currency: str) -> str:

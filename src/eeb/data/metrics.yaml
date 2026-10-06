@@ -17,7 +17,11 @@
 # - FX conversion;
 # - payment-term compliance;
 # - anything over documents.
-version: 1
+# Version history:
+#   1  initial catalog.
+#   2  raw_on_time_delivery_pct divides by nullif(count(*), 0): a filtered query with no
+#      grouping that matches no row returns NULL instead of dividing by zero (F-5).
+version: 2
 metrics:
   invoiced_amount:
     definition: >-

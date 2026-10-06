@@ -126,6 +126,9 @@ def cmd_cases_build(args: argparse.Namespace) -> int:
                     "principals": r["principals"]}
     try:
         files = corpus.assemble(instance, check)
+    except corpus.CorpusGateError as e:
+        print(f"CASE BUILD FAILED: {e}", file=sys.stderr)
+        return 1
     except GoldSqlError as e:
         print(json.dumps(e.args[0], indent=2), file=sys.stderr)
         print("CASE BUILD FAILED: a SQL gold fact does not hold under its principal's login",
@@ -142,8 +145,12 @@ def cmd_cases_build(args: argparse.Namespace) -> int:
 
 
 def cmd_cases_verify(args: argparse.Namespace) -> int:
+    """Exit 0 when the directory is exactly what the code builds from the instance. The
+    human-in-the-loop status and freeze eligibility are reported, not required."""
     problems = corpus.verify(Path(args.cases), Path(args.instance))
-    print(json.dumps({"problems": problems, "passed": not problems}, indent=2))
+    report = {"problems": problems, "passed": not problems,
+              **corpus.human_status(Path(args.cases), args.reference_family)}
+    print(json.dumps(report, indent=2))
     return 1 if problems else 0
 
 
@@ -172,6 +179,9 @@ def main(argv: list[str] | None = None) -> int:
     cv = csub.add_parser("verify", help="rebuild from the instance and compare")
     cv.add_argument("--cases", required=True)
     cv.add_argument("--instance", required=True)
+    cv.add_argument("--reference-family",
+                    help="model family of the reference agent; paraphrases from it are "
+                         "rejected")
     cv.set_defaults(func=cmd_cases_verify)
     args = p.parse_args(argv)
     return int(args.func(args))

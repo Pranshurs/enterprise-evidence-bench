@@ -36,6 +36,12 @@ from eeb.cases.view import InstanceData
 from eeb.facts_version import CASE_SCHEMA_VERSION
 
 MAX_PRINCIPALS_PER_BINDING = 3
+# Share of each split whose cases must carry a restricted-value probe: the asking principal
+# sees only part of the rows, so the authorized answer differs from the all-rows answer.
+PROBE_SHARE = (1, 10)
+# How the probe cases of a split are divided (percent; the last stratum takes the rest).
+PROBE_STRATA: tuple[tuple[str, int], ...] = (
+    ("sql", 30), ("cross_source_out_of_layer", 25), ("cross_source_in_layer", 45))
 ALL_PRINCIPALS_ORDER = ("cm_met", "cm_elc", "cm_multi", "cm_moved", "buyer_in", "buyer_eu",
                         "ap_in", "ap_eu", "ap_uk", "fin_ctrl", "legal", "risk")
 
@@ -45,6 +51,38 @@ def _rank(seed: int, *parts: Any) -> str:
                                      default=str).encode()).hexdigest()
 
 
+def probe_stratum(slot: dict[str, Any]) -> str | None:
+    """Where a probe case may sit, or None. A counterfactual pair's permitted member must
+    see the complete answer, and an injection case is bound to the reader of the supplier's
+    correspondence, so neither is eligible."""
+    if slot["group_id"] or slot["overlays"]["injection"]:
+        return None
+    if slot["class"] == "S":
+        return "sql"
+    if slot["class"] == "X":
+        return "cross_source_out_of_layer" if slot["overlays"]["ool"] else "cross_source_in_layer"
+    return None
+
+
+def probe_slots(plan: list[dict[str, Any]], seed: int,
+                share: tuple[int, int] = PROBE_SHARE) -> set[str]:
+    """Slots that must be bound to a principal with a partial view of the answer rows:
+    ``share`` of every split, divided over the strata by ``PROBE_STRATA``."""
+    num, den = share
+    out: set[str] = set()
+    for split in sorted({s["split"] for s in plan}):
+        members = [s for s in plan if s["split"] == split]
+        need = -(-len(members) * num // den)
+        taken = 0
+        for k, (stratum, pct) in enumerate(PROBE_STRATA):
+            n = need - taken if k == len(PROBE_STRATA) - 1 else need * pct // 100
+            eligible = sorted((s for s in members if probe_stratum(s) == stratum),
+                              key=lambda s: _rank(seed, "probe", s["case_id"]))
+            out |= {s["case_id"] for s in eligible[:n]}
+            taken += n
+    return out
+
+
 def family_id(t: Template, slots: dict[str, Any]) -> str:
     """A family is one question: a template with its slots filled. Cases that differ only
     in who asks belong to the same family."""
@@ -52,14 +90,19 @@ def family_id(t: Template, slots: dict[str, Any]) -> str:
 
 
 class CaseBuilder:
-    def __init__(self, data: InstanceData, seed: int) -> None:
+    def __init__(self, data: InstanceData, seed: int,
+                 probe_share: tuple[int, int] = PROBE_SHARE) -> None:
+        """``probe_share`` is lowered only by tests on fixtures too small to hold enough
+        partially-visible answers; the corpus gate checks the real share."""
         self.data = data
         self.seed = seed
+        self.probe_share = probe_share
         self.ctx = Ctx.build(data)
         self.search = MetricSearch()
         self.rejections: Counter[str] = Counter()
         self.used: set[str] = set()
         self.families: set[str] = set()
+        self.template_use: Counter[str] = Counter()
         self._bindings: dict[str, list[dict[str, Any]]] = {}
         self._cursor: Counter[str] = Counter()
         self._cands: dict[str, list[tuple[dict[str, Any], str, Any]]] = {}
@@ -85,7 +128,7 @@ class CaseBuilder:
         return sorted(t.principals(self.ctx, slots), key=lambda p: _rank(self.seed, p, slots))
 
     def _validated(self, t: Template, slots: dict[str, Any], pid: str, cls: str,
-                   want_ool: bool | None) -> dict[str, Any] | None:
+                   want_ool: bool | None, need_probe: bool = False) -> dict[str, Any] | None:
         gold = self._gold(t, slots, pid)
         if gold is None:
             return None
@@ -93,6 +136,12 @@ class CaseBuilder:
         miss = missing_evidence(gold, view)
         if gold["expected_outcome"] == "ANSWER" and miss:
             self.rejections[f"{t.id}: principal lacks evidence"] += 1
+            return None
+        global_gold = self._global_gold(t, slots)
+        probe = restricted_probe(gold, global_gold) if global_gold else []
+        if need_probe and not probe:
+            # Not a rejection of the candidate: it stays available to slots without the
+            # requirement. Checked before the costlier validators.
             return None
         nec = necessity(self.data, slots, gold) if gold["facts"] else None
         if cls == "X" and nec and (nec["sql_alone_sufficient"] or nec["docs_alone_sufficient"]):
@@ -106,8 +155,6 @@ class CaseBuilder:
             if not want_ool and not mem["in_metric_layer"]:
                 self.rejections[f"{t.id}: designated in-layer but not reconstructible"] += 1
                 return None
-        global_gold = self._global_gold(t, slots)
-        probe = restricted_probe(gold, global_gold) if global_gold else []
         return {"gold": gold, "necessity": nec, "metric_layer": mem, "restricted_probe": probe}
 
     def _global_gold(self, t: Template, slots: dict[str, Any]) -> dict[str, Any] | None:
@@ -187,15 +234,26 @@ class CaseBuilder:
             self._cands[key] = sorted(out, key=lambda c: _rank(self.seed, t.id, c[0], c[1]))
         return self._cands[key]
 
-    def fill_single(self, slot: dict[str, Any], index: int) -> dict[str, Any]:
+    def _least_used_first(self, templates: list[Template], index: int) -> list[Template]:
+        """Templates in the order to try them: fewest cases so far first, ties broken by a
+        rotation on the slot index. A template that runs out of bindings then spills evenly
+        over the others instead of onto its neighbour."""
+        n = len(templates)
+        return sorted(templates, key=lambda t: (self.template_use[t.id],
+                                                (templates.index(t) - index) % n))
+
+    def fill_single(self, slot: dict[str, Any], index: int,
+                    probe: bool = False) -> dict[str, Any]:
+        """Bind one slot. With ``probe`` the case must carry a restricted-value probe."""
         templates = self._compatible(slot)
         if not templates:
             raise RuntimeError(f"no template for slot {slot['case_id']}")
         inj = slot["overlays"]["injection"]
-        for attempt in range(len(templates)):
-            t = templates[(index + attempt) % len(templates)]
+        for t in self._least_used_first(templates, index):
             cands = self.candidates(t, inj)
-            ck = f"{t.id}|{inj}"
+            # Probe slots walk the candidates with their own cursor, so a candidate they
+            # pass over (a principal who sees everything) stays available to other slots.
+            ck = f"{t.id}|{inj}|{probe}"
             while self._cursor[ck] < len(cands):
                 slots, pid, injection = cands[self._cursor[ck]]
                 self._cursor[ck] += 1
@@ -203,11 +261,13 @@ class CaseBuilder:
                 fam = family_id(t, slots)
                 if key in self.used or fam in self.families:
                     continue
-                v = self._validated(t, slots, pid, slot["class"], slot["overlays"]["ool"])
+                v = self._validated(t, slots, pid, slot["class"], slot["overlays"]["ool"],
+                                    need_probe=probe)
                 if v is None:
                     continue
                 self.used.add(key)
                 self.families.add(fam)
+                self.template_use[t.id] += 1
                 case = self._case(slot, t, slots, pid, v, fam)
                 if injection:
                     case["injection"] = as_jsonable({
@@ -215,13 +275,13 @@ class CaseBuilder:
                                                   "marker", "incident_id")})
                 return case
         raise RuntimeError(f"candidates exhausted for slot {slot['case_id']} "
-                           f"({slot['class']}, ool={slot['overlays']['ool']}, injection={inj})")
+                           f"({slot['class']}, ool={slot['overlays']['ool']}, injection={inj}, "
+                           f"probe={probe})")
 
     def fill_group(self, permitted_slot: dict[str, Any], denied_slot: dict[str, Any],
                    index: int) -> tuple[dict[str, Any], dict[str, Any]]:
         templates = [t for t in TEMPLATES if t.cls == "X" and not t.ool and t.supplier_scoped]
-        for attempt in range(len(templates)):
-            t = templates[(index + attempt) % len(templates)]
+        for t in self._least_used_first(templates, index):
             bindings = self.bindings(t)
             while self._cursor[t.id] < len(bindings):
                 slots = bindings[self._cursor[t.id]]
@@ -245,6 +305,7 @@ class CaseBuilder:
                     dpid, missing = denied
                     self.used.add(_rank(0, t.id, slots, pid))
                     self.families.add(fam)
+                    self.template_use[t.id] += 1
                     x = self._case(permitted_slot, t, slots, pid, v, fam)
                     a_gold: dict[str, Any] = {"expected_outcome": "ABSTAIN", "facts": [],
                               "answer_requirement": [], "required_citations": [],
@@ -287,6 +348,12 @@ class CaseBuilder:
         for i, gid in enumerate(sorted(by_group)):
             x, a = self.fill_group(by_group[gid]["permitted"], by_group[gid]["denied"], i)
             cases[x["case_id"]], cases[a["case_id"]] = x, a
-        for i, slot in enumerate(s for s in plan if not s["group_id"]):
-            cases[slot["case_id"]] = self.fill_single(slot, i)
+        probes = probe_slots(plan, self.seed, self.probe_share)
+        # Probe slots first: the bindings a partially-sighted principal can answer are the
+        # scarce ones, and other slots would otherwise use them up.
+        singles = list(enumerate(s for s in plan if not s["group_id"]))
+        for want in (True, False):
+            for i, slot in singles:
+                if (slot["case_id"] in probes) is want:
+                    cases[slot["case_id"]] = self.fill_single(slot, i, want)
         return [cases[s["case_id"]] for s in plan]
